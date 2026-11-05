@@ -39,7 +39,14 @@ npm start            # python3 -m http.server 8080
 # open http://localhost:8080
 ```
 
-On a phone, open the hosted URL and choose **Add to Home Screen** to install it. Any static host works: GitHub Pages, Netlify, Cloudflare Pages.
+### Use it on your phone (GitHub Pages)
+
+1. On GitHub, open the repo's **Settings → Pages**.
+2. Under **Build and deployment**, set **Source** to **Deploy from a branch**. Pick the branch with the app and the **/ (root)** folder, then click **Save**.
+3. After about a minute the app is live at **https://linkplayt.github.io/quotesnap-/**.
+4. Open that link on your phone and tap **Share → Add to Home Screen** (iPhone, Safari) or **⋮ → Install app** (Android, Chrome).
+
+Each phone keeps its own quotes. Use **Settings → Backup / Restore** to move data between devices.
 
 Tip: **Settings → Load sample quotes** fills the app with demo data.
 
