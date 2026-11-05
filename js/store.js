@@ -5,17 +5,38 @@ const DB = 'quotesnap';
 const STORE = 'kv';
 let dbp;
 
+let memory = null; // fallback when IndexedDB is blocked (private mode, in-app browsers)
+
+function openDb() {
+  return new Promise((resolve, reject) => {
+    let req;
+    try { req = indexedDB.open(DB, 1); } catch (e) { reject(e); return; }
+    const timer = setTimeout(() => reject(new Error('storage timed out')), 4000);
+    req.onupgradeneeded = () => req.result.createObjectStore(STORE);
+    req.onsuccess = () => { clearTimeout(timer); resolve(req.result); };
+    req.onerror = () => { clearTimeout(timer); reject(req.error); };
+    req.onblocked = () => { clearTimeout(timer); reject(new Error('storage blocked')); };
+  });
+}
+
 function db() {
   if (!dbp) {
-    dbp = new Promise((resolve, reject) => {
-      const req = indexedDB.open(DB, 1);
-      req.onupgradeneeded = () => req.result.createObjectStore(STORE);
-      req.onsuccess = () => resolve(req.result);
-      req.onerror = () => reject(req.error);
+    dbp = (typeof indexedDB === 'undefined' ? Promise.reject(new Error('no IndexedDB')) : openDb()).catch((err) => {
+      console.warn('IndexedDB unavailable, using memory only:', err);
+      memory = new Map();
+      return null;
     });
   }
   return dbp;
 }
+
+const mem = {
+  get: (k) => memory.get(k),
+  set: (k, v) => void memory.set(k, v),
+  del: (k) => void memory.delete(k),
+  keys: () => [...memory.keys()],
+  clear: () => memory.clear(),
+};
 
 async function tx(mode, fn) {
   const d = await db();
@@ -28,12 +49,15 @@ async function tx(mode, fn) {
   });
 }
 
+const use = (name, idb) => async (...a) => ((await db()) ? idb(...a) : mem[name](...a));
+
 export const kv = {
-  get: (k) => tx('readonly', (s) => s.get(k)),
-  set: (k, v) => tx('readwrite', (s) => s.put(v, k)),
-  del: (k) => tx('readwrite', (s) => s.delete(k)),
-  keys: () => tx('readonly', (s) => s.getAllKeys()),
-  clear: () => tx('readwrite', (s) => s.clear()),
+  get: use('get', (k) => tx('readonly', (s) => s.get(k))),
+  set: use('set', (k, v) => tx('readwrite', (s) => s.put(v, k))),
+  del: use('del', (k) => tx('readwrite', (s) => s.delete(k))),
+  keys: use('keys', () => tx('readonly', (s) => s.getAllKeys())),
+  clear: use('clear', () => tx('readwrite', (s) => s.clear())),
+  persistent: async () => !!(await db()),
 };
 
 export const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);

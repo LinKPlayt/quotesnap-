@@ -1162,7 +1162,22 @@ async function loadDemo() {
 
 // ---------------------------------------------------------------- boot
 
-window.addEventListener('hashchange', route);
-await load();
-route();
-if ('serviceWorker' in navigator && location.protocol !== 'file:') navigator.serviceWorker.register('sw.js').catch(() => {});
+async function boot() {
+  await load();
+  window.addEventListener('hashchange', route);
+  await route();
+  window.__qsStarted = true;
+  if (!(await kv.persistent())) {
+    const bar = document.createElement('div');
+    bar.className = 'callout no-print';
+    bar.style.margin = '0 auto';
+    bar.textContent = '⚠ This browser is blocking storage, so quotes will be lost when you close it. Open the link in Safari or Chrome and turn off Private browsing.';
+    document.body.insertBefore(bar, app);
+  }
+  if ('serviceWorker' in navigator && location.protocol !== 'file:') navigator.serviceWorker.register('sw.js').catch(() => {});
+}
+
+boot().catch((err) => {
+  console.error(err);
+  window.__qsFail?.(err?.message || err);
+});

@@ -1,5 +1,5 @@
 // Offline-first app shell. Bump VERSION when files change.
-const VERSION = 'quotesnap-v1';
+const VERSION = 'quotesnap-v2';
 const SHELL = ['./', 'index.html', 'css/styles.css', 'js/app.js', 'js/engine.js', 'js/pricebook.js', 'js/store.js', 'js/ai.js', 'icons/icon.svg', 'manifest.webmanifest'];
 
 self.addEventListener('install', (e) => {

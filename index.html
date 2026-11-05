@@ -24,7 +24,7 @@
     <a href="#/new" class="btn primary new-btn">+ New Quote</a>
   </header>
 
-  <main id="app" class="app"></main>
+  <main id="app" class="app"><div class="empty" id="boot-msg">Loading QuoteSnap…</div></main>
 
   <nav class="tabbar no-print" id="tabbar">
     <a href="#/" data-route="dashboard"><span>▦</span>Home</a>
@@ -37,6 +37,27 @@
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
   <dialog id="modal" class="modal"></dialog>
 
+  <script>
+    // Polyfills for older phone browsers (runs before the app modules).
+    if (typeof structuredClone !== 'function') window.structuredClone = function (v) { return v === undefined ? v : JSON.parse(JSON.stringify(v)); };
+    if (!Array.prototype.at) Array.prototype.at = function (i) { i = Math.trunc(i) || 0; if (i < 0) i += this.length; return this[i]; };
+
+    // If the app can't start, say why instead of showing a blank page.
+    window.__qsFail = function (msg) {
+      if (window.__qsStarted) return;
+      var el = document.getElementById('app');
+      if (!el) return;
+      el.innerHTML = '<div class="card" style="max-width:520px;margin:2rem auto"><h2>QuoteSnap couldn\'t start</h2>' +
+        '<p>Try these:</p><ul><li>Open the link in <b>Safari</b> (iPhone) or <b>Chrome</b> (Android), not inside Gmail, Facebook or another app.</li>' +
+        '<li>Turn off <b>Private</b> / Incognito browsing.</li><li>Update your phone\'s software, then pull down to reload.</li></ul>' +
+        '<p class="muted small">Details: ' + String(msg).replace(/[<>&]/g, '') + '</p>' +
+        '<button class="btn primary" onclick="location.reload()">Reload</button></div>';
+    };
+    window.addEventListener('error', function (e) { window.__qsFail(e.message || 'Script error'); });
+    window.addEventListener('unhandledrejection', function (e) { window.__qsFail((e.reason && e.reason.message) || e.reason); });
+    setTimeout(function () { window.__qsFail('The app did not load within 12 seconds. Check your connection.'); }, 12000);
+  </script>
   <script type="module" src="js/app.js"></script>
+  <script nomodule>window.__qsFail('This browser is too old to run QuoteSnap.');</script>
 </body>
 </html>
