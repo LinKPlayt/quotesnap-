@@ -261,3 +261,66 @@ ul.scope li { margin-bottom: .35rem; }
   .doc { box-shadow: none; padding: 0; max-width: none; border-radius: 0; }
   .doc .avoid { break-inside: avoid; }
 }
+
+/* ---------- v2: photo-first capture & automation ---------- */
+.tiny { font-size: .75rem; }
+.chip.on { background: var(--primary-soft); border-color: var(--primary); color: var(--primary); }
+.btn.big { padding: .85rem 1rem; font-size: 1.05rem; }
+.snowbtn { border-color: var(--snow); color: var(--snow); }
+
+.hero { padding: 1.1rem; }
+.snap-btn {
+  display: flex; align-items: center; gap: 1rem; cursor: pointer; user-select: none;
+  background: linear-gradient(135deg, var(--primary), #2f7d55); color: #fff;
+  border-radius: 16px; padding: 1.1rem 1.25rem; font-size: 1.05rem; box-shadow: 0 6px 18px rgba(31, 95, 63, .25);
+}
+.snap-btn b { font-size: 1.35rem; }
+.snap-btn:active { transform: scale(.985); }
+.snap-icon { font-size: 2.6rem; line-height: 1; }
+.hero-alt { display: flex; gap: .5rem; flex-wrap: wrap; margin-top: .75rem; }
+.hero-alt .btn { flex: 1 1 120px; }
+
+.badge.ai { background: #ece6fb; color: #5a3cc0; text-transform: none; letter-spacing: 0; }
+.badge.conf-high { background: #d9f2e3; color: #17643c; text-transform: none; letter-spacing: 0; }
+.badge.conf-medium { background: #fff1d6; color: #8a5a00; text-transform: none; letter-spacing: 0; }
+.badge.conf-low { background: #fbe0de; color: #9b2119; text-transform: none; letter-spacing: 0; }
+
+.ai-status { display: flex; gap: .6rem; align-items: center; margin-top: .75rem; padding: .7rem .8rem; border-radius: 10px; background: linear-gradient(90deg, #efe9fd, #e5eef8); color: #3b2c7a; font-size: .88rem; font-weight: 600; }
+.spin { width: 18px; height: 18px; flex: none; border: 2.5px solid rgba(90, 60, 192, .25); border-top-color: #5a3cc0; border-radius: 50%; animation: spin .8s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.ai-card { margin-top: .75rem; border: 1.5px solid #cfc2f3; background: #faf8ff; border-radius: 12px; padding: .75rem .85rem; }
+.ai-chip { display: inline-flex; gap: .3rem; align-items: baseline; font-size: .82rem; font-weight: 650; background: #fff; border: 1px solid #ddd3f7; border-radius: 999px; padding: .25rem .6rem; }
+.ai-chip .muted { font-weight: 500; }
+.upsell { display: flex; gap: .5rem; align-items: center; padding: .45rem 0; border-top: 1px dashed #ddd3f7; }
+input.ai-filled, select.ai-filled { border-color: #8b6bd1; box-shadow: 0 0 0 2px rgba(139, 107, 209, .18); background-color: #fbf9ff; }
+.chip.ai-filled { box-shadow: 0 0 0 2px rgba(139, 107, 209, .35); }
+
+.quick { display: flex; flex-wrap: wrap; gap: .35rem; align-items: center; margin: .5rem 0 0; }
+.qchip { font: inherit; font-size: .8rem; font-weight: 650; border: 1px solid var(--border); background: var(--surface); color: var(--text); border-radius: 999px; padding: .3rem .65rem; cursor: pointer; }
+.qchip.on { background: var(--primary-soft); border-color: var(--primary); color: var(--primary); }
+
+figure.photo { margin: 0; }
+.photo figcaption { position: absolute; left: 0; right: 0; bottom: 0; padding: 14px 6px 4px; font-size: .68rem; line-height: 1.2; color: #fff; background: linear-gradient(transparent, rgba(0, 0, 0, .75)); }
+.photo.add { font-size: .78rem; }
+
+.fc { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: .3rem; margin: .6rem 0; text-align: center; }
+.fd { border: 1px solid var(--border); border-radius: 10px; padding: .35rem .1rem; }
+.fd.snowy { background: var(--snow-soft); border-color: var(--snow); }
+.fd.windy { border-color: var(--accent); }
+.fi { font-size: 1.2rem; }
+
+.doc figure { margin: 0; }
+.doc figcaption { font-size: 10px; color: #555; margin-top: 2px; line-height: 1.3; }
+.doc .paylink { margin: 8px 0 0; text-align: right; font-size: 12px; }
+
+@media (prefers-color-scheme: dark) {
+  .ai-card { background: #1d1a2b; border-color: #4a3c80; }
+  .ai-chip { background: #241f38; border-color: #4a3c80; }
+  .upsell { border-color: #4a3c80; }
+  .ai-status { background: linear-gradient(90deg, #241f38, #172a3a); color: #d6ccff; }
+  input.ai-filled, select.ai-filled { background-color: #1d1a2b; }
+  .badge.ai { background: #2c2450; color: #c9b8ff; }
+  .badge.conf-high { background: #173a26; color: #7fe0a8; }
+  .badge.conf-medium { background: #3a2c0c; color: #f0c060; }
+  .badge.conf-low { background: #3d1614; color: #ff9b92; }
+}

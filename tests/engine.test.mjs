@@ -8,7 +8,7 @@ const jobFrom = (text) => applyParsed(newJob(), parseDescription(text));
 test('parses the headline example', () => {
   const p = parseDescription('Tree removal. 45-foot oak. Backyard access. Requires bucket truck.');
   assert.equal(p.division, 'tree');
-  assert.deepEqual(p.tree.trees[0], { work: 'remove', heightFt: 45, species: 'oak', qty: 1 });
+  assert.deepEqual(p.tree.trees[0], { work: 'remove', heightFt: 45, species: 'oak' });
   assert.equal(p.tree.access, 'backyard');
   assert.equal(p.tree.method, 'bucket');
 });

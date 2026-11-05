@@ -1,6 +1,6 @@
 // Offline-first app shell. Bump VERSION when files change.
-const VERSION = 'quotesnap-v2';
-const SHELL = ['./', 'index.html', 'css/styles.css', 'js/app.js', 'js/engine.js', 'js/pricebook.js', 'js/store.js', 'js/ai.js', 'icons/icon.svg', 'manifest.webmanifest'];
+const VERSION = 'quotesnap-v3';
+const SHELL = ['./', 'index.html', 'css/styles.css', 'js/app.js', 'js/engine.js', 'js/pricebook.js', 'js/store.js', 'js/ai.js', 'js/geo.js', 'js/pdf.js', 'js/vendor/jspdf.umd.min.js', 'js/vendor/html2canvas.min.js', 'icons/icon.svg', 'manifest.webmanifest'];
 
 self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(VERSION).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting()));

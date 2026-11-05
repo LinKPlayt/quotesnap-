@@ -74,9 +74,40 @@ export function estimateDbh(heightFt, species) {
 
 // ---------- natural language parsing ----------
 
+const PHONE_RE = /(?:\+?1[\s.-]?)?\(?\b(\d{3})\)?[\s.-]?(\d{3})[\s.-]?(\d{4})\b/;
+const EMAIL_RE = /\b[\w.+-]+@[\w-]+(?:\.[\w-]+)+\b/;
+const SUFFIX = 'St|Street|Rd|Road|Ave|Avenue|Ln|Lane|Dr|Drive|Ct|Court|Blvd|Boulevard|Way|Pl|Place|Cir|Circle|Pkwy|Parkway|Hwy|Highway|Ter|Terrace|Trl|Trail|Pike|Loop';
+const STREET_RE = new RegExp(`\\b\\d{1,6}\\s+(?:[NSEW]\\.?\\s+)?(?:[A-Z0-9][\\w']*\\s+){1,3}(?:${SUFFIX}|${SUFFIX.toLowerCase()})\\b\\.?(?:,\\s*[A-Z][a-z]+(?:\\s[A-Z][a-z]+)?)?(?:,?\\s*[A-Z]{2}\\b)?(?:\\s+\\d{5})?`);
+const NAME_RES = [
+  /\b(?:[Cc]ustomer|[Cc]lient|[Hh]omeowner|[Oo]wner|[Nn]ame)(?:'s name)?\s*(?:is|:|-)?\s*((?:Mr|Mrs|Ms|Dr)\.?\s+)?([A-Z][a-z'’-]+(?:\s+[A-Z][a-z'’-]+){0,2})/,
+  /\b(?:[Ff]or|[Cc]all|[Mm]eet(?:ing)?(?: with)?)\s+((?:Mr|Mrs|Ms|Dr)\.?\s+)?([A-Z][a-z'’-]+\s+[A-Z][a-z'’-]+)/,
+  /\b(Mr|Mrs|Ms|Dr)\.?\s+([A-Z][a-z'’-]+(?:\s+[A-Z][a-z'’-]+)?)/,
+];
+const NOT_NAMES = /^(Tree|Oak|Maple|Pine|Snow|Remove|Removal|Trim|Backyard|Front|Stump|The|This|That|Job|Quote|Power|Bucket|Crane)\b/;
+
+// Pull customer contact details out of free text (voice notes, typed notes).
+export function parseCustomer(text = '') {
+  const c = {};
+  const phone = text.match(PHONE_RE);
+  if (phone) c.phone = `${phone[1]}-${phone[2]}-${phone[3]}`;
+  const email = text.match(EMAIL_RE);
+  if (email) c.email = email[0];
+  const street = text.match(STREET_RE);
+  if (street) c.address = street[0].replace(/\s+/g, ' ').replace(/[.,]$/, '').trim();
+  for (const re of NAME_RES) {
+    const m = text.match(re);
+    if (m && m[2] && !NOT_NAMES.test(m[2])) { c.name = ((m[1] || '') + m[2]).trim(); break; }
+  }
+  return c;
+}
+
 export function parseDescription(text = '') {
-  const t = ' ' + text.toLowerCase().replace(/[’']/g, "'") + ' ';
-  const out = { division: null, tree: {}, snow: {}, flags: {} };
+  const customer = parseCustomer(text);
+  // strip contact details so phone digits / house numbers don't read as heights or depths
+  let clean = text;
+  for (const re of [PHONE_RE, EMAIL_RE, STREET_RE]) clean = clean.replace(new RegExp(re.source, 'g'), ' ');
+  const t = ' ' + clean.toLowerCase().replace(/[’']/g, "'") + ' ';
+  const out = { division: null, tree: {}, snow: {}, flags: {}, customer };
 
   const snowWords = /\b(snow|plow|plowing|shovel|shoveling|salt|salting|de-?ice|ice melt|blizzard|roof rake)\b/;
   const treeWords = /\b(tree|oak|maple|pine|stump|limb|branch|trim|prune|removal|remove|arborist|canopy|spruce|ash|elm|cable)\b/;
@@ -109,7 +140,7 @@ export function parseDescription(text = '') {
     if (dbh2) tree.dbhIn = +dbh2[1];
     else if (dbh && (!height || dbh.index !== height.index)) tree.dbhIn = +dbh[1];
     if (speciesHit) tree.species = speciesHit;
-    tree.qty = qty;
+    if (qtyM) tree.qty = qty;
     out.tree.trees = [tree];
 
     if (/\b(no access|tight access|no equipment|hand ?carry|narrow gate|between houses|landlocked)\b/.test(t)) out.tree.access = 'tight';
@@ -172,21 +203,104 @@ export function parseDescription(text = '') {
   return out;
 }
 
-// Merge parsed fields into an existing job without clobbering explicit user edits.
-export function applyParsed(job, parsed) {
+// Merge parsed fields into a job.
+// - locks: { 'job.tree.access': true, ... } fields the estimator set by hand; never overwritten.
+// - parsed.replace (AI results): booleans can be switched off and the tree list is replaced.
+//   Without it (notes parsing) fields are only added, never removed.
+export function applyParsed(job, parsed, locks = {}) {
   const j = structuredClone(job);
-  if (parsed.division) j.division = parsed.division;
-  Object.assign(j, { emergency: j.emergency || !!parsed.flags.emergency, permit: j.permit || !!parsed.flags.permit });
-  if (parsed.flags.miles) j.miles = parsed.flags.miles;
-  if (parsed.division === 'tree' || (!parsed.division && parsed.tree.trees)) {
-    const p = parsed.tree;
-    if (p.trees) j.tree.trees = p.trees.map((t, i) => ({ ...newTree(), ...(j.tree.trees[i] || {}), ...t }));
-    for (const k of ['access', 'method', 'debris', 'trimLevel']) if (p[k]) j.tree[k] = p[k];
-    for (const k of ['firewood', 'stumps', 'restore']) if (p[k]) j.tree[k] = true;
-    if (p.hazards) j.tree.hazards = { ...j.tree.hazards, ...p.hazards };
+  const free = (path) => !locks[path];
+  const rep = !!parsed.replace;
+  const f = parsed.flags || {};
+  if (parsed.division && free('job.division')) j.division = parsed.division;
+  if (free('job.emergency') && (rep ? typeof f.emergency === 'boolean' : f.emergency)) j.emergency = !!f.emergency;
+  if (free('job.permit') && f.permit) j.permit = true;
+  if (free('job.miles') && f.miles) j.miles = f.miles;
+  const division = parsed.division || j.division;
+
+  const p = parsed.tree || {};
+  if (division === 'tree') {
+    if (p.trees && p.trees.length) {
+      const old = j.tree.trees;
+      const rows = p.trees.map((t, i) => {
+        const row = { ...newTree(), ...(old[i] || {}) };
+        for (const [k, v] of Object.entries(t)) if (v !== undefined && v !== null && v !== '' && free(`job.tree.trees.${i}.${k}`)) row[k] = v;
+        return row;
+      });
+      // keep extra rows the estimator added (always for notes; for AI only if they edited them)
+      old.slice(p.trees.length).forEach((row, k) => {
+        const i = k + p.trees.length;
+        if (!rep || Object.keys(locks).some((l) => l.startsWith(`job.tree.trees.${i}.`))) rows.push(row);
+      });
+      j.tree.trees = rows;
+    }
+    for (const k of ['access', 'method', 'debris', 'trimLevel']) if (p[k] && free(`job.tree.${k}`)) j.tree[k] = p[k];
+    for (const k of ['firewood', 'stumps', 'restore']) {
+      if (!free(`job.tree.${k}`)) continue;
+      if (rep ? typeof p[k] === 'boolean' : p[k]) j.tree[k] = !!p[k];
+    }
+    for (const [k, v] of Object.entries(p.hazards || {})) {
+      if (!free(`job.tree.hazards.${k}`)) continue;
+      if (rep ? typeof v === 'boolean' : v) j.tree.hazards[k] = !!v;
+    }
   }
-  if (parsed.division === 'snow') Object.assign(j.snow, parsed.snow);
+  if (division === 'snow') {
+    for (const [k, v] of Object.entries(parsed.snow || {})) if (v !== undefined && v !== null && free(`job.snow.${k}`)) j.snow[k] = v;
+  }
   return j;
+}
+
+// Human-readable list of what changed between two jobs (for the "AI filled this in" review).
+const FIELD_LABELS = {
+  'job.division': 'Job type', 'job.emergency': 'Emergency', 'job.permit': 'Permit', 'job.miles': 'Distance',
+  'job.tree.access': 'Access', 'job.tree.method': 'Equipment', 'job.tree.debris': 'Debris', 'job.tree.trimLevel': 'Trim level',
+  'job.tree.stumps': 'Stump grinding', 'job.tree.restore': 'Lawn restore', 'job.tree.firewood': 'Firewood',
+  'job.snow.property': 'Property', 'job.snow.areaSqft': 'Paved area', 'job.snow.walkLf': 'Sidewalks', 'job.snow.roofSqft': 'Roof snow',
+  'job.snow.depthIn': 'Snow depth', 'job.snow.method': 'Equipment', 'job.snow.salt': 'Salt', 'job.snow.obstacles': 'Obstacles',
+  'job.snow.priority': 'Priority', 'job.snow.contract': 'Quote as',
+};
+const TREE_KEYS = { work: 'work', species: 'species', heightFt: 'height', dbhIn: 'trunk', qty: 'qty' };
+const VALUE_LABELS = {
+  open: 'Open', driveway: 'Driveway / street', backyard: 'Backyard gate', tight: 'Tight – no equipment',
+  auto: 'Auto', bucket: 'Bucket truck', crane: 'Crane', lift: 'Spider lift', climb: 'Climb & rig',
+  haul: 'Haul everything', chipLeaveLogs: 'Haul brush, leave wood', leave: 'Leave on site',
+  remove: 'Remove', trim: 'Trim', stump: 'Stump', cable: 'Cable', tree: 'Tree', snow: 'Snow',
+  plow: 'Plow truck', skid: 'Skid steer', blower: 'Snow blower', shovel: 'Shovel crew',
+  residential: 'Residential', commercial: 'Commercial', low: 'Few', med: 'Some', high: 'Many', perPush: 'Per push', seasonal: 'Seasonal',
+  light: 'Light', standard: 'Standard', heavy: 'Heavy',
+};
+const UNITS = { heightFt: ' ft', dbhIn: '"', 'job.snow.areaSqft': ' sq ft', 'job.snow.walkLf': ' ft', 'job.snow.roofSqft': ' sq ft', 'job.snow.depthIn': '"', 'job.miles': ' mi' };
+
+export function formatValue(v, unitKey) {
+  if (typeof v === 'boolean') return v ? 'Yes' : 'No';
+  if (typeof v === 'number') return v.toLocaleString() + (UNITS[unitKey] || '');
+  return VALUE_LABELS[v] || (v ? cap(String(v)) : '—');
+}
+
+export function describeChanges(before, after) {
+  const out = [];
+  const add = (path, label, a, b, unitKey) => {
+    if (a === b || (a == null && b === '') || (a === '' && b == null)) return;
+    out.push({ path, label, from: formatValue(a, unitKey ?? path), to: formatValue(b, unitKey ?? path) });
+  };
+  for (const k of ['division', 'emergency', 'permit', 'miles']) add(`job.${k}`, FIELD_LABELS[`job.${k}`], before[k], after[k]);
+  if (after.division === 'tree') {
+    const n = Math.max(before.tree.trees.length, after.tree.trees.length);
+    for (let i = 0; i < n; i++) {
+      const a = before.tree.trees[i] || {};
+      const b = after.tree.trees[i];
+      if (!b) { out.push({ path: `job.tree.trees.${i}`, label: `Tree ${i + 1}`, from: 'listed', to: 'removed' }); continue; }
+      for (const [k, word] of Object.entries(TREE_KEYS)) {
+        if (k === 'dbhIn' && !b[k]) continue;
+        add(`job.tree.trees.${i}.${k}`, `${n > 1 ? `Tree ${i + 1} ` : 'Tree '}${word}`, a[k], b[k], k);
+      }
+    }
+    for (const k of ['access', 'method', 'debris', 'trimLevel', 'stumps', 'restore', 'firewood']) add(`job.tree.${k}`, FIELD_LABELS[`job.tree.${k}`], before.tree[k], after.tree[k]);
+    for (const k of Object.keys(HAZARDS)) add(`job.tree.hazards.${k}`, HAZARDS[k].label, !!before.tree.hazards[k], !!after.tree.hazards[k]);
+  } else {
+    for (const k of Object.keys(after.snow)) if (FIELD_LABELS[`job.snow.${k}`]) add(`job.snow.${k}`, FIELD_LABELS[`job.snow.${k}`], before.snow[k], after.snow[k]);
+  }
+  return out;
 }
 
 export const newTree = () => ({ work: 'remove', species: '', heightFt: 40, dbhIn: 0, qty: 1 });
@@ -302,7 +416,7 @@ export function calcTree(job, pb = DEFAULT_PRICEBOOK, opts = {}) {
   const hz = tree.hazards || {};
   const { method, reasons } = recommendMethod(tree);
   const accessF = ACCESS[tree.access]?.f ?? 1;
-  const hazardF = 1 + Object.keys(HAZARDS).reduce((s, k) => s + (hz[k] ? HAZARDS[k].f : 0), 0);
+  const hazardF = 1 + Object.keys(HAZARDS).reduce((s, k) => s + (hz[k] && !(k === 'nearStructure' && hz.overHouse) ? HAZARDS[k].f : 0), 0);
   const methodF = METHOD[method].f;
 
   let workHours = 0;   // crew hours aloft/ground cutting
@@ -548,9 +662,9 @@ export function buildOptions(job, pb = DEFAULT_PRICEBOOK, marginPct) {
     });
     if (!list.some((o) => o.recommended)) {
       const e = calcTree(job, pb, opts);
-      list.splice(1, 0, { id: 'custom', name: 'As Specified', blurb: 'Exactly the work described.', est: e, scope: scopeOfWork(job, e), recommended: true });
+      list.push({ id: 'custom', name: 'As Specified', blurb: 'Exactly the work described.', est: e, scope: scopeOfWork(job, e), recommended: true });
     }
-    return list;
+    return list.sort((a, b) => a.est.price - b.est.price);
   }
   const events = +job.snow.events || pb.snow.eventsPerSeason;
   const perPush = calcSnow(job, pb, { ...opts, override: { salt: false } });
