@@ -11,6 +11,9 @@ import { interpret } from './localai/interpret.js';
 import { mergeCompany, DEFAULT_MULTIPLIERS } from './company.js';
 import { snapshotEstimate, compareJob, newActual, actualSiteHours } from './learning.js';
 import { viewResources, viewRates, viewPricing } from './views-company.js';
+import { ask, choose, coach, speak, listen, canListen, sayMoney } from './guide.js';
+import { runOnboarding } from './onboarding.js';
+import { parseCustomer } from './engine.js';
 
 // ---------------------------------------------------------------- state
 
@@ -32,6 +35,12 @@ const DEFAULT_SETTINGS = {
   nextNumber: 1001,
   showItemized: true,
   followUpDays: 3,
+  onboarded: false,   // first-run setup finished or skipped
+  seenTips: {},       // one-time tips already shown
+  simple: true,       // simple screens: extras folded away
+  textSize: 'normal', // normal | large | xlarge
+  voice: { speak: false }, // read prices out loud
+  work: 'both',
 };
 
 const STATUSES = ['draft', 'sent', 'accepted', 'scheduled', 'completed', 'paid', 'declined'];
@@ -65,9 +74,13 @@ function setPath(o, path, v) {
 async function load() {
   const saved = (await kv.get('settings')) || {};
   S.settings = { ...structuredClone(DEFAULT_SETTINGS), ...saved };
-  for (const k of ['business', 'ai', 'geo']) S.settings[k] = { ...DEFAULT_SETTINGS[k], ...(saved[k] || {}) };
+  for (const k of ['business', 'ai', 'geo', 'voice']) S.settings[k] = { ...DEFAULT_SETTINGS[k], ...(saved[k] || {}) };
+  S.settings.seenTips ||= {};
+  // people who used the app before this update already know their way around
+
   S.pricebook = mergePricebook(await kv.get('pricebook'));
   S.estimates = (await kv.get('estimates')) || [];
+  if (saved.onboarded === undefined && S.estimates.length) S.settings.onboarded = true;
   S.company = mergeCompany(await kv.get('company'));
 }
 const saveSettings = () => kv.set('settings', S.settings);
@@ -177,6 +190,145 @@ function isEmptyDraft(e) {
   return e && e.status === 'draft' && !e.customer.name && !e.job.description && !e.photos.length && !e.customer.phone;
 }
 
+// ---------------------------------------------------------------- easy-to-use helpers
+
+function applyTextSize() {
+  document.documentElement.dataset.text = S.settings.textSize || 'normal';
+}
+
+const TIPS = {
+  dashboard: [
+    { el: '.snap-btn', title: 'Start here', text: 'Tap this and take 2 or 3 photos of the job. The app fills in the work and the price for you.' },
+    { el: '.hero-alt', text: 'No photos? Start a tree or snow quote by hand here.' },
+    { el: '#aichip', text: 'This line tells you if the photo AI is ready. Once it has downloaded, it works without internet.' },
+    { el: '#helpbtn', text: 'Stuck? Tap the ? button on any screen for help.' },
+  ],
+  editor: [
+    { el: '#stepbar', title: 'Your steps', text: 'Every quote has these steps. A ✓ means that step is done. Tap a step to jump to it.' },
+    { el: '#card-photos', text: 'Your photos are here. Tap Camera to add more. The app reads them by itself.' },
+    { el: '#card-customer', text: 'Who the quote is for. The 📍 button fills in the address from where you are standing.' },
+    { el: '.price-hero', text: 'This is the price. It updates by itself when you change anything.' },
+    { el: '#sendbar', title: 'Send it', text: 'When it looks right, tap Send. The customer gets a PDF quote by text or email.' },
+  ],
+  resources: [
+    { el: '#addw', text: 'Add each person on your crew, what they get paid, and which machines they can run.' },
+    { el: '#adde', text: 'Add your trucks and machines here. Pick the type first, then tap Add.' },
+  ],
+  rates: [{ el: '#resetrates', text: 'These are how fast your crew works. You can leave them alone; the app improves them over time from finished jobs (you approve every change).' }],
+  pricebook: [{ el: '.card', text: 'Your costs and profit. You only need to set these once.' }],
+};
+
+function runTips(name, force = false) {
+  const steps = TIPS[name];
+  if (!steps || !S.settings.onboarded) return;
+  setTimeout(() => coach(name, steps, S.settings.seenTips, saveSettings, { force }), force ? 0 : 500);
+}
+
+async function openHelp() {
+  const name = (location.hash.slice(2).split(/[/?]/)[0]) || 'dashboard';
+  const screen = name === 'e' ? 'editor' : name;
+  const pick = await choose('How can we help?', [
+    ...(TIPS[screen] ? [{ id: 'tips', icon: '💡', label: 'Show me how this screen works', sub: 'Short tips that point at the buttons' }] : []),
+    { id: 'how', icon: '📸', label: 'How to make a quote', sub: 'The 3 steps' },
+    { id: 'setup', icon: '⚙', label: 'Run the setup again', sub: 'Business, crew, equipment, shop' },
+  ], { cancel: 'Close' });
+  if (pick === 'tips') runTips(screen, true);
+  if (pick === 'how') await ask('1. Tap 📸 Snap a job and take 2 or 3 photos.\n\n2. Check the boxes with a purple outline: the app filled those in. Tap any of them to change it.\n\n3. Tap the big Send button at the bottom. The customer gets a PDF quote.', { title: 'How to make a quote', ok: 'Got it', cancel: '' });
+  if (pick === 'setup') await startOnboarding();
+}
+
+async function startOnboarding() {
+  const goal = await runOnboarding({ S, saveSettings, saveCompany, getPosition, reverseGeocode, geocode, applyTextSize, speak });
+  if (goal === 'sample') {
+    if (!S.estimates.some((e) => e.customer.name === 'Dana Whitfield')) await loadDemo();
+    const demo = S.estimates.find((e) => e.customer.name === 'Dana Whitfield');
+    location.hash = demo ? '#/e/' + demo.id : '#/';
+  } else if (goal === 'snap' && location.hash && location.hash !== '#/') {
+    location.hash = '#/';
+  } else {
+    route(); // stay on the screen they opened, just refresh it (and show its tips)
+  }
+}
+
+// Guess "Dana Whitfield" from "dana whitfield 555 014 2299" when no "customer is…" phrase was used.
+function guessName(text) {
+  const before = text.split(/\d|@/)[0].replace(/\b(customer|client|name|is|for|the|phone|number|call|at)\b/gi, ' ').replace(/[^a-zA-Z' -]/g, ' ').trim();
+  const words = before.split(/\s+/).filter(Boolean).slice(0, 4);
+  return words.length ? words.map((w) => w[0].toUpperCase() + w.slice(1).toLowerCase()).join(' ') : '';
+}
+
+function fillCustomer(e, c) {
+  const got = [];
+  for (const k of ['name', 'phone', 'email', 'address']) {
+    if (!c[k]) continue;
+    e.customer[k] = c[k];
+    e.locks[`customer.${k}`] = true;
+    const inp = $(`[data-k="customer.${k}"]`);
+    if (inp) inp.value = c[k];
+    got.push(c[k]);
+  }
+  renderCustomerExtras();
+  changed();
+  return got;
+}
+
+// "Who is this quote for?" with big choices: say it, pick a contact, type it, or skip.
+async function askCustomer(e) {
+  if (!ED || ED.est !== e) return;
+  const contacts = 'contacts' in navigator && 'ContactsManager' in window;
+  const pick = await choose('Who is this quote for?', [
+    ...(canListen() ? [{ id: 'say', icon: '🎤', label: 'Say their name and phone', sub: 'Example: “Dana Whitfield, 555 014 2299”' }] : []),
+    ...(contacts ? [{ id: 'contacts', icon: '📇', label: 'Pick from my contacts' }] : []),
+    { id: 'type', icon: '⌨', label: 'Type it in' },
+  ], { message: 'The photos are being checked while you do this.', cancel: 'Skip for now' });
+  if (pick === 'say') {
+    const text = await listen({ prompt: "Say the customer's name and phone number", hint: 'Tap Done when you have finished.' });
+    if (!text) { toast("Didn't catch that. Tap the name box to type it."); return; }
+    const c = parseCustomer(text);
+    if (!c.name) c.name = guessName(text);
+    const got = fillCustomer(e, c);
+    toast(got.length ? `Got it: ${got.join(', ')}` : "Didn't catch a name or number. Tap the name box to type it.", 4000);
+  } else if (pick === 'contacts') {
+    $('#pickc')?.click();
+  } else if (pick === 'type') {
+    const inp = $('[data-k="customer.name"]');
+    inp?.scrollIntoView({ block: 'center' });
+    inp?.focus();
+  }
+}
+
+// Next weekday from tomorrow that has no job booked yet.
+function nextFreeDay() {
+  const booked = new Set(S.estimates.filter((x) => x.scheduledFor && !['declined', 'paid', 'completed'].includes(x.status)).map((x) => x.scheduledFor));
+  const d = new Date();
+  for (let i = 1; i < 60; i++) {
+    d.setDate(d.getDate() + 1);
+    const iso = d.toISOString().slice(0, 10);
+    if (d.getDay() !== 0 && d.getDay() !== 6 && !booked.has(iso)) return iso;
+  }
+  return null;
+}
+
+async function offerSchedule(e) {
+  if (e.scheduledFor) return;
+  const day = nextFreeDay();
+  if (!day) return;
+  const nice = new Date(day + 'T12:00:00').toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' });
+  const yes = await ask(`Your next open day is ${nice}. Book this job then?`, { title: 'Schedule the job', icon: '📅', ok: 'Yes, book it', cancel: 'Not now' });
+  if (!yes || !ED || ED.est !== e) return;
+  e.scheduledFor = day;
+  if (e.status === 'accepted') setStatus(e, 'scheduled');
+  const st = $('#status');
+  if (st) st.value = e.status;
+  logHistory(e, `Scheduled for ${fmtDate(day)}`);
+  renderSchedule();
+  renderHistory();
+  changed();
+  toast(`📅 Booked for ${nice}. Tap “Add to calendar” to put it in your phone.`, 4500);
+}
+
+const normAddr = (a) => (a || '').toLowerCase().split(',')[0].replace(/\b(street|st|road|rd|avenue|ave|lane|ln|drive|dr|court|ct)\b\.?/g, '').replace(/[^a-z0-9]/g, '');
+
 // ---------------------------------------------------------------- AI photo analysis
 
 const aiKey = (est) => est.photos.join(',') + '|' + (est.job.description || '').trim();
@@ -212,6 +364,10 @@ async function runAi(id, { auto = false } = {}) {
     if (ED && ED.est.id === id) {
       refreshEditorAfterFill();
       toast(n ? `✨ Analysis complete: filled in ${n} thing${n === 1 ? '' : 's'}. Review and send.` : '✨ Analysis complete. Nothing new to change.');
+      if (S.settings.voice?.speak) {
+        const c = compute(target);
+        speak(`Quote ready. ${sayMoney(c.t.total)} to ${jobTitle(target.job).replace(/ ft /g, ' foot ').replace('Snow:', 'clear snow,')}. Tap send when you're ready.`);
+      }
     } else {
       await persist(target);
     }
@@ -315,9 +471,19 @@ async function locateInto(est, { auto = false } = {}) {
     if (!est.customer.address && !est.locks?.['customer.address']) {
       const addr = await reverseGeocode(pos.lat, pos.lon).catch(() => '');
       if (addr) { est.customer.address = addr; filled = true; (est.aiFields ||= []).push('customer.address'); }
+      const known = addr && !est.customer.name && S.estimates.find((x) => x.id !== est.id && x.customer.name && normAddr(x.customer.address) === normAddr(addr));
+      if (known) {
+        for (const k of ['name', 'phone', 'email']) if (known.customer[k]) { est.customer[k] = known.customer[k]; est.aiFields.push('customer.' + k); }
+        toast(`👋 Returning customer: ${known.customer.name}`, 4000);
+        for (const k of ['name', 'phone', 'email']) { const inp = $(`[data-k="customer.${k}"]`); if (inp) inp.value = est.customer[k] || ''; }
+      }
     }
     const shop = S.settings.geo.shop;
-    if (shop && !est.locks?.['job.miles'] && !est.job.miles) est.job.miles = roadMiles(shop, est.geo);
+    if (shop && !est.locks?.['job.miles'] && !est.job.miles) {
+      const mi = roadMiles(shop, est.geo);
+      if (mi <= 200) est.job.miles = mi;
+      else toast(`That spot is ${Math.round(mi).toLocaleString()} miles from your shop, so the distance was not filled in. Check the address.`, 5000);
+    }
     if (ED && ED.est === est) {
       const inp = $('[data-k="customer.address"]');
       if (inp) inp.value = est.customer.address;
@@ -339,7 +505,9 @@ async function milesFromAddress(est) {
   try {
     const g = await geocode(est.customer.address);
     est.geo = { lat: g.lat, lon: g.lon };
-    est.job.miles = roadMiles(shop, est.geo);
+    const dist = roadMiles(shop, est.geo);
+    if (dist > 200) { toast(`That address looks ${Math.round(dist).toLocaleString()} miles away, so the distance was not filled in. Check it.`, 5000); return; }
+    est.job.miles = dist;
     const mi = $('[data-k="job.miles"]');
     if (mi) mi.value = est.job.miles;
     changed();
@@ -369,9 +537,9 @@ async function route() {
   if (name === 'doc') return viewDoc(parts[1], q.get('t') || 'quote');
   if (name === 'estimates') return viewList(q.get('s') || 'all');
   if (name === 'customers') return viewCustomers();
-  if (name === 'pricebook') return viewPricing(pageCtx());
-  if (name === 'resources') return viewResources(pageCtx());
-  if (name === 'rates') return viewRates(pageCtx());
+  if (name === 'pricebook') { viewPricing(pageCtx()); return runTips('pricebook'); }
+  if (name === 'resources') { viewResources(pageCtx()); return runTips('resources'); }
+  if (name === 'rates') { viewRates(pageCtx()); return runTips('rates'); }
   if (name === 'settings') return viewSettings();
   app.innerHTML = '<div class="empty">Not found. <a href="#/">Go home</a></div>';
 }
@@ -485,6 +653,7 @@ function viewDashboard() {
   `;
   for (const id of ['snapcam', 'snapgal']) $('#' + id).onchange = (ev) => createFromPhotos([...ev.target.files]);
   renderAiChip();
+  runTips('dashboard');
   hydrateThumbs();
   renderWeather(st);
 }
@@ -623,6 +792,7 @@ async function viewEditor(id) {
   e.locks ||= {};
   e.aiFields ||= [];
   leaving = async () => {
+    document.body.classList.remove('has-sendbar');
     await flushSave();
     const cur = S.estimates.find((x) => x.id === id);
     if (isEmptyDraft(cur)) { S.estimates = S.estimates.filter((x) => x.id !== id); await saveEstimates(); }
@@ -630,15 +800,16 @@ async function viewEditor(id) {
   const customers = [...new Map(S.estimates.filter((x) => x.customer.name).map((x) => [x.customer.name, x.customer])).values()];
   const contacts = 'contacts' in navigator && 'ContactsManager' in window;
   app.innerHTML = `
-    <div class="row no-print" style="margin-bottom:.75rem">
-      <a class="btn sm" href="#/estimates" aria-label="Back">←</a>
+    <div class="row no-print" style="margin-bottom:.5rem">
+      <a class="btn sm" href="#/estimates" aria-label="Back to quotes">← Quotes</a>
       <h1 style="margin:0">${esc(e.number)}</h1>
-      <select id="status" style="width:auto">${STATUSES.map((s) => opt(s, cap(s), e.status)).join('')}</select>
+      <label class="stage">Stage <select id="status" style="width:auto">${STATUSES.map((s) => opt(s, cap(s), e.status)).join('')}</select></label>
       <div class="spacer"></div><span class="muted small" id="saved">Saved</span>
     </div>
+    <div class="stepbar no-print" id="stepbar"></div>
     <div class="editor">
       <div>
-        <div class="card">
+        <div class="card" id="card-photos">
           <h2>📸 Photos</h2>
           <div class="photos" id="photos"></div>
           <div class="muted tiny" style="margin-top:.4rem">Best results: 1 photo of the whole tree with the house or a person for scale · 1 trunk close-up · 1 of the access path. For snow: the whole driveway or lot.</div>
@@ -653,7 +824,7 @@ async function viewEditor(id) {
           </div>
         </div>
 
-        <div class="card">
+        <div class="card" id="card-customer">
           <div class="row" style="margin-bottom:.6rem"><h2 style="margin:0">👤 Customer</h2><div class="spacer"></div>
             ${contacts ? '<button class="btn sm" id="pickc">📇 From contacts</button>' : ''}</div>
           <div class="grid g2 stack">
@@ -666,22 +837,22 @@ async function viewEditor(id) {
           <div id="maplink" style="margin-top:.5rem"></div>
         </div>
 
-        <div class="card">
+        <div class="card" id="card-details">
           <div class="row" style="margin-bottom:.75rem"><h2 style="margin:0">🧾 Job details</h2><div class="spacer"></div>
             <div class="seg ${e.job.division === 'snow' ? 'snow' : ''}" id="div">
               <button data-d="tree" class="${e.job.division === 'tree' ? 'on' : ''}">🌳 Tree</button>
               <button data-d="snow" class="${e.job.division === 'snow' ? 'on' : ''}">❄ Snow</button>
             </div></div>
           <div id="details"></div>
-          <h3>Site</h3>
-          <div class="grid g3">
+          <details class="fold" ${S.settings.simple ? '' : 'open'}><summary>📍 Distance, difficulty, rush or weekend work</summary>
+          <div class="grid g3" style="margin-top:.5rem">
             ${numField('Distance (miles)', 'job.miles', e.job.miles)}
             <div class="chips" style="align-items:end" id="siteflags"></div>
-          </div>
+          </div></details>
         </div>
 
-        <div class="card">
-          <h2>➕ Adjustments</h2>
+        <details class="card fold" ${S.settings.simple ? '' : 'open'}>
+          <summary><b>➕ Extra charges, discount, private notes</b></summary>
           <div id="adjs"></div>
           <div class="row" style="margin-top:.5rem">
             <button class="btn sm" id="addadj">+ Custom line item</button>
@@ -690,17 +861,18 @@ async function viewEditor(id) {
           </div>
           <h3>Internal notes (not on quote)</h3>
           <textarea data-k="notes" placeholder="Gate code, dog in yard, wants work before June…">${esc(e.notes)}</textarea>
-        </div>
+        </details>
       </div>
 
       <div class="results">
-        <div class="card">
+        <div class="card" id="card-price">
           <div id="res-top"></div>
+          <details class="fold" ${S.settings.simple ? '' : 'open'}><summary>🔍 How this price was worked out</summary>
           <label class="f" style="margin-top:.5rem">Target margin: <b id="mval"></b>
             <input type="range" min="10" max="60" step="1" id="margin" value="${e.marginPct ?? S.pricebook.targetMarginPct}"></label>
-          <div id="res"></div>
+          <div id="res"></div></details>
         </div>
-        <div class="card">
+        <div class="card" id="card-send">
           <h2>📤 Send & finish</h2>
           <button class="btn accent block big" id="send">✉ Send quote to customer</button>
           <div class="actions" style="margin-top:.5rem">
@@ -716,7 +888,9 @@ async function viewEditor(id) {
           <div class="small muted" id="hist"></div>
         </div>
       </div>
-    </div>`;
+    </div>
+    <div class="sendbar no-print" id="sendbar"></div>`;
+  document.body.classList.add('has-sendbar');
 
   renderPhotos();
   renderCustomerExtras();
@@ -731,11 +905,49 @@ async function viewEditor(id) {
 
   if (pendingSnap.has(id)) {
     pendingSnap.delete(id);
-    if (S.settings.geo.autoLocate) locateInto(e, { auto: true });
+    const located = S.settings.geo.autoLocate ? locateInto(e, { auto: true }) : Promise.resolve();
     if (aiOn() && S.settings.ai.auto) runAi(id, { auto: true });
-  } else if (aiOn() && S.settings.ai.auto && e.photos.length && !e.ai) {
-    scheduleAi(e, 300);
+    // ask who it's for while the photos are checked (after location, which may recognize a returning customer)
+    located.finally(() => setTimeout(() => { if (ED && ED.est === e && !e.customer.name && !e.customer.phone) askCustomer(e); }, 300));
+  } else {
+    if (aiOn() && S.settings.ai.auto && e.photos.length && !e.ai) scheduleAi(e, 300);
+    runTips('editor');
   }
+}
+
+// Step bar + bottom Send bar: always show what's done and what to do next.
+function renderSteps() {
+  const e = ED?.est;
+  const bar = $('#stepbar');
+  if (!e || !bar) return;
+  const st = {
+    photos: e.photos.length > 0 || !!e.job.description,
+    customer: !!(e.customer.name && (e.customer.phone || e.customer.email)),
+    details: !!(e.ai || Object.keys(e.locks || {}).some((k) => k.startsWith('job.')) || e.job.description),
+    send: e.status !== 'draft',
+  };
+  st.price = st.photos && st.details;
+  const items = [['photos', '📸', 'Photos', 'card-photos'], ['customer', '👤', 'Customer', 'card-customer'], ['details', '🧾', 'Details', 'card-details'], ['price', '💲', 'Price', 'card-price'], ['send', '📤', 'Send', 'card-send']];
+  const current = items.find(([k]) => !st[k])?.[0];
+  bar.innerHTML = items.map(([k, icon, label, target], i) => `<button class="step ${st[k] ? 'done' : ''} ${k === current ? 'now' : ''}" data-go="${target}" data-step="${k}"><span class="step-n">${st[k] ? '✓' : i + 1}</span><span class="step-l">${label}</span></button>`).join('');
+  bar.querySelectorAll('[data-go]').forEach((b) => (b.onclick = () => {
+    if (b.dataset.step === 'customer' && !st.customer) { askCustomer(e); return; }
+    if (b.dataset.step === 'send') { $('#send')?.click(); return; }
+    document.getElementById(b.dataset.go)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }));
+  const { t } = compute(e);
+  const sb = $('#sendbar');
+  if (!sb) return;
+  const hint = !st.photos ? 'Next: add a photo' : !st.customer ? 'Next: who is it for?' : e.status === 'draft' ? 'Ready to send' : `Stage: ${cap(e.status)}`;
+  sb.innerHTML = `<div class="sb-price"><div class="sb-total">${money(t.total)}</div><div class="tiny muted">${esc(hint)}</div></div>
+    ${!st.customer ? '<button class="btn big" id="sb-cust">👤 Customer</button>' : ''}
+    <button class="btn accent big" id="sb-send">✉ Send</button>`;
+  $('#sb-send').onclick = async () => {
+    if (!st.customer && !(await ask("You haven't added the customer's phone or email yet. Send anyway?", { ok: 'Send anyway', cancel: 'Add customer' }))) { askCustomer(e); return; }
+    $('#send').click();
+  };
+  const sc = $('#sb-cust');
+  if (sc) sc.onclick = () => askCustomer(e);
 }
 
 // ---- photos + AI panels
@@ -1136,6 +1348,7 @@ function renderResults() {
   const { options, sel, t, tiers, margin } = compute(e);
   const x = sel.est;
   $('#mval').textContent = margin + '%';
+  renderSteps();
   $('#res-top').innerHTML = `
     <div class="muted small">${esc(jobTitle(e.job))}</div>
     <div class="price-hero"><div class="big">${money(t.total)}</div><div class="muted">${sel.unit ? esc(sel.unit) : 'customer price'}${t.tax ? ' incl. tax' : ''}</div></div>
@@ -1328,7 +1541,12 @@ function wireEditor() {
   }
 
   $('#margin').oninput = (ev) => { e.marginPct = +ev.target.value; changed(); };
-  $('#status').onchange = (ev) => { setStatus(e, ev.target.value); renderHistory(); renderSchedule(); changed(); if (['completed', 'paid'].includes(e.status) && S.settings.business.reviewLink) toast('Tip: tap Send → Review to ask for a review', 4000); };
+  $('#status').onchange = (ev) => {
+    setStatus(e, ev.target.value);
+    renderHistory(); renderSchedule(); changed();
+    if (['completed', 'paid'].includes(e.status) && S.settings.business.reviewLink) toast('Tip: tap Send → Review to ask for a review', 4000);
+    if (e.status === 'accepted') offerSchedule(e);
+  };
 
   $$('#div button').forEach((b) => (b.onclick = () => {
     if (e.job.division === b.dataset.d) return;
@@ -1365,6 +1583,7 @@ function wireEditor() {
   if (!SR) $('#mic').classList.add('hidden');
   else {
     let rec = null;
+    let wantSend = false;
     $('#mic').onclick = () => {
       if (rec) { rec.stop(); return; }
       rec = new SR();
@@ -1373,7 +1592,13 @@ function wireEditor() {
       rec.continuous = true;
       $('#mic').textContent = '🔴 Listening… tap to stop';
       rec.onresult = (r) => {
-        const text = [...r.results].slice(r.resultIndex).map((x) => x[0].transcript).join(' ');
+        let text = [...r.results].slice(r.resultIndex).map((x) => x[0].transcript).join(' ');
+        // spoken commands: "send it", "send the quote", "text it", "email it"
+        if (/\b(send (it|the quote|quote)|text it|email it)\b/i.test(text)) {
+          text = text.replace(/\b(send (it|the quote|quote)|text it|email it)\b/gi, '').trim();
+          wantSend = true;
+          rec.stop();
+        }
         e.job.description = (e.job.description ? e.job.description.trim() + ' ' : '') + text.trim();
         $('#desc').value = e.job.description;
         readNotes();
@@ -1384,6 +1609,7 @@ function wireEditor() {
         rec = null;
         $('#mic').textContent = '🎤 Talk';
         scheduleAi(e, 400);
+        if (wantSend) { wantSend = false; setTimeout(() => $('#send')?.click(), 300); }
       };
       rec.start();
     };
@@ -1404,7 +1630,7 @@ function wireEditor() {
     toast('Duplicated');
   };
   $('#del').onclick = async () => {
-    if (!confirm(`Delete ${e.number}? This cannot be undone.`)) return;
+    if (!(await ask(`Delete quote ${e.number}? This can't be undone.`, { title: 'Delete quote?', ok: 'Delete', danger: true, icon: '🗑' }))) return;
     clearTimeout(saveTimer);
     ED = null;
     S.estimates = S.estimates.filter((x) => x.id !== e.id);
@@ -1577,7 +1803,8 @@ function openSign(e, onUpdate) {
     logHistory(e, `Signed by ${e.signedName}`);
     onUpdate();
     m.close();
-    toast('Accepted! 🎉 Pick a job date to schedule it.');
+    toast('Accepted! 🎉');
+    setTimeout(() => offerSchedule(e), 600);
   };
 }
 
@@ -1723,7 +1950,7 @@ async function viewDoc(id, type) {
 // ---------------------------------------------------------------- business setup pages
 
 function pageCtx() {
-  return { app, S, $, $$, esc, toast, money, setPath, getPath, saveCompany, savePricebook, setLeaving: (fn) => { leaving = fn; } };
+  return { app, S, $, $$, esc, toast, money, setPath, getPath, saveCompany, savePricebook, ask, setLeaving: (fn) => { leaving = fn; } };
 }
 
 // ---------------------------------------------------------------- price book (legacy view, replaced by Pricing Settings)
@@ -1767,7 +1994,7 @@ function viewPricebook() {
   };
   leaving = async () => { app.oninput = null; };
   $('#reset').onclick = async () => {
-    if (!confirm('Reset all prices to defaults?')) return;
+    if (!(await ask('Reset all prices to defaults?', { ok: 'Reset', danger: true }))) return;
     S.pricebook = structuredClone(DEFAULT_PRICEBOOK);
     await savePricebook();
     viewPricebook();
@@ -1784,6 +2011,13 @@ function viewSettings() {
   const tog = (label, k) => `<label class="chip"><input type="checkbox" data-s="${k}" ${getPath(st, k) ? 'checked' : ''}>${label}</label>`;
   app.innerHTML = `
     <h1>Settings</h1>
+    <div class="card" style="margin-top:.75rem"><h2>👍 Easy to use</h2>
+      <div class="grid g2">
+        <label class="f">Text size<select data-s="textSize">${opt('normal', 'Normal', st.textSize)}${opt('large', 'Large', st.textSize)}${opt('xlarge', 'Extra large', st.textSize)}</select></label>
+        <div class="chips" style="align-items:end">${tog('Simple screens (hide extras)', 'simple')}${tog('🔊 Read prices out loud', 'voice.speak')}</div>
+      </div>
+      <div class="row" style="margin-top:.6rem"><button class="btn" id="rerun">🎓 Show the setup & tutorial again</button><button class="btn" id="retips">💡 Show tips again</button></div>
+    </div>
     <div class="card setup-links" style="margin-top:.75rem"><h2>🏢 Business setup</h2>
       <div class="actions">
         <a class="btn" href="#/resources">👷 My Resources<br><span class="tiny muted">Workers & equipment</span></a>
@@ -1856,18 +2090,22 @@ function viewSettings() {
       $('#cloudbox')?.classList.toggle('hidden', v !== 'cloud');
     }
     if (k === 'ai.processor') localAI.setProcessor(v);
+    if (k === 'textSize') applyTextSize();
+    if (k === 'voice.speak' && v) speak('Prices will be read out loud.');
     const stEl = $('#aistat');
     if (stEl) stEl.textContent = aiStatusText();
   };
   app.oninput = onS;
   app.onchange = onS;
   leaving = async () => { app.oninput = null; app.onchange = null; };
+  $('#rerun').onclick = () => startOnboarding();
+  $('#retips').onclick = async () => { S.settings.seenTips = {}; await saveSettings(); toast('Tips will show again on each screen'); };
   $('#aidl').onclick = async () => {
     if (!localAI.support.ok) { toast(localAI.support.reason, 5000); return; }
     await localAI.load().then(() => toast('✓ AI ready. Photo analysis now works offline.')).catch((err) => toast(err.message, 5000));
   };
   $('#aiclear').onclick = async () => {
-    if (!confirm('Remove the downloaded AI from this device? It downloads again the next time you analyze a photo.')) return;
+    if (!(await ask('Remove the downloaded AI from this phone? It downloads again the next time you analyze a photo.', { ok: 'Remove', danger: true }))) return;
     await localAI.clear().catch(() => {});
     const stEl = $('#aistat');
     if (stEl) stEl.textContent = aiStatusText();
@@ -1915,7 +2153,7 @@ function viewSettings() {
     try {
       const j = JSON.parse(await ev.target.files[0].text());
       if (j.app !== 'quotesnap') throw new Error();
-      if (!confirm('Restore this backup? It replaces the data on this device.')) return;
+      if (!(await ask('Restore this backup? It replaces everything on this phone.', { title: 'Restore backup?', ok: 'Restore', danger: true }))) return;
       const key = S.settings.ai.apiKey;
       await kv.clear();
       for (const [k, v] of Object.entries(j.data)) await kv.set(k, v);
@@ -1928,7 +2166,7 @@ function viewSettings() {
   };
   $('#demo').onclick = async () => { await loadDemo(); toast('Sample quotes added'); location.hash = '#/'; };
   $('#wipe').onclick = async () => {
-    if (!confirm('Erase ALL quotes, photos and settings on this device?')) return;
+    if (!(await ask("Erase ALL quotes, photos and settings on this phone? This can't be undone.", { title: 'Erase everything?', ok: 'Erase everything', danger: true, icon: '⚠' }))) return;
     await kv.clear();
     S.photos.clear();
     await load();
@@ -1964,9 +2202,13 @@ async function loadDemo() {
 
 async function boot() {
   await load();
+  applyTextSize();
+  const hb = $('#helpbtn');
+  if (hb) hb.onclick = openHelp;
   window.addEventListener('hashchange', route);
   await route();
   window.__qsStarted = true;
+  if (!S.settings.onboarded) setTimeout(startOnboarding, 300);
   if (!(await kv.persistent())) {
     const bar = document.createElement('div');
     bar.className = 'callout no-print';

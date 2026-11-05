@@ -19,6 +19,22 @@ QuoteSnap builds:
 - **Professional PDF**: branded quote with photos, options, pricing, deposit, terms and signature. Also an **invoice** and an internal **crew job sheet** (equipment checklist, safety briefing, no prices).
 - **Send**: email, text or share sheet with a ready-written message, plus one-tap follow-ups.
 
+## Easy to use, hands-free
+
+- **First-run setup (2 minutes, all skippable):** one question per screen with big buttons. It asks what work you do; your business name and phone; your crew size and pay (with **+ / −** buttons, no typing); how many of each machine you have; and where your shop is. Your answers build **My Resources**, so the first quote is priced with your own crew and equipment. It ends with a 3-step "how it works" and an offer to open a sample quote.
+- **Tips that point at the real buttons** the first time you open each screen, and a **?** help button on every screen to show them again.
+- **Big, plain dialogs** instead of tiny browser pop-ups, for example "Delete quote? [Cancel] [Delete]".
+- **Step bar on every quote** (Photos → Customer → Details → Price → Send) with ✓ for each finished step. A **Send bar** stays at the bottom with the price and what to do next.
+- **Simple screens** (on by default): extra charges, rush or weekend work, and the price details are folded away until needed. **Large and extra-large text** are in Settings → Easy to use.
+- **Hands-free quoting:**
+  1. Snap photos. The app checks them, fills in the job, and fills in the address from GPS.
+  2. If the address matches an earlier customer, it fills in their name and phone ("👋 Returning customer").
+  3. If not, it asks **"Who is this quote for?"**: say their name and number, pick from contacts, or type it.
+  4. It can **read the price out loud** when the quote is ready.
+  5. Say **"send it"** while talking to open Send.
+  6. When the customer accepts, it offers **the next open weekday** for the job.
+- **Safety:** a far-away GPS fix or mistyped address (over 200 miles from the shop) never fills in the distance; the app warns you instead.
+
 ## More features
 
 | Area | What you get |
@@ -135,6 +151,8 @@ js/planner.js        resource-aware task planning, bottlenecks, cost and price
 js/company.js        workers, equipment, production rates, multipliers (defaults + sample)
 js/learning.js       estimated vs actual, rate suggestions
 js/views-company.js  My Resources, Production Rates, Pricing Settings pages
+js/guide.js          big dialogs, one-time tips, voice (listen / speak)
+js/onboarding.js     first-run setup + tutorial
 js/pricebook.js      default rates
 js/ai.js             optional Claude cloud photo analysis (schema + prompt)
 js/localai/          on-device AI: manager (page side), worker (ONNX Runtime), interpret (scores → fields)

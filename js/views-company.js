@@ -111,13 +111,13 @@ export function viewResources(ctx) {
     $$('[data-f]').forEach((b) => (b.onclick = () => { filter = viewResources.filter = b.dataset.f; draw(); }));
     $('#addw').onclick = () => { C.workers.push(newWorker({ name: `Worker ${C.workers.length + 1}` })); save(); draw(); };
     $('#adde').onclick = () => { const e = newEquipment($('#newtype').value); C.equipment.push(e); viewResources.open = e.id; save(); draw(); };
-    $$('[data-delw]').forEach((b) => (b.onclick = () => { if (!confirm(`Remove ${C.workers[+b.dataset.delw].name || 'this worker'}?`)) return; C.workers.splice(+b.dataset.delw, 1); save(); draw(); }));
-    $$('[data-dele]').forEach((b) => (b.onclick = () => { if (!confirm(`Remove ${C.equipment[+b.dataset.dele].name}?`)) return; C.equipment.splice(+b.dataset.dele, 1); save(); draw(); }));
+    $$('[data-delw]').forEach((b) => (b.onclick = async () => { if (!(await ctx.ask(`Remove ${C.workers[+b.dataset.delw].name || 'this worker'}?`, { ok: 'Yes', danger: true }))) return; C.workers.splice(+b.dataset.delw, 1); save(); draw(); }));
+    $$('[data-dele]').forEach((b) => (b.onclick = async () => { if (!(await ctx.ask(`Remove ${C.equipment[+b.dataset.dele].name}?`, { ok: 'Yes', danger: true }))) return; C.equipment.splice(+b.dataset.dele, 1); save(); draw(); }));
     $$('[data-adda]').forEach((b) => (b.onclick = () => { const e = C.equipment[+b.dataset.adda]; (e.attachments ||= []).push({ type: 'plow', name: '' }); viewResources.open = e.id; save(); draw(); }));
     $$('[data-dela]').forEach((b) => (b.onclick = () => { const [i, j] = b.dataset.dela.split('.').map(Number); C.equipment[i].attachments.splice(j, 1); viewResources.open = C.equipment[i].id; save(); draw(); }));
     $$('details.res-item').forEach((d) => d.addEventListener('toggle', () => { if (d.open) viewResources.open = d.dataset.id; }));
     const se = $('#startempty');
-    if (se) se.onclick = () => { if (!confirm('Remove the sample workers and equipment?')) return; C.workers = []; C.equipment = []; C.sample = false; save(); draw(); };
+    if (se) se.onclick = async () => { if (!(await ctx.ask('Remove the sample workers and equipment?', { ok: 'Yes', danger: true }))) return; C.workers = []; C.equipment = []; C.sample = false; save(); draw(); };
   }
   draw();
 }
@@ -175,11 +175,11 @@ export function viewRates(ctx) {
           ${multTable('snowDepth', 'Snow: depth')}
         </div>
       </div>`;
-    $('#resetrates').onclick = () => { if (!confirm('Reset all production rates to the defaults?')) return; C.rates = structuredClone(DEFAULT_RATES); ctx.saveCompany(); draw(); };
-    $('#resetmult').onclick = () => { if (!confirm('Reset all multipliers to the defaults?')) return; C.multipliers = structuredClone(DEFAULT_MULTIPLIERS); ctx.saveCompany(); draw(); };
-    $$('[data-apply]').forEach((b) => (b.onclick = () => {
+    $('#resetrates').onclick = async () => { if (!(await ctx.ask('Reset all production rates to the defaults?', { ok: 'Yes', danger: true }))) return; C.rates = structuredClone(DEFAULT_RATES); ctx.saveCompany(); draw(); };
+    $('#resetmult').onclick = async () => { if (!(await ctx.ask('Reset all multipliers to the defaults?', { ok: 'Yes', danger: true }))) return; C.multipliers = structuredClone(DEFAULT_MULTIPLIERS); ctx.saveCompany(); draw(); };
+    $$('[data-apply]').forEach((b) => (b.onclick = async () => {
       const s = sugg[+b.dataset.apply];
-      if (!confirm(`Change "${s.task}" from ${s.current} to ${s.suggested} ${s.unit} per hour?\n\n${s.why}`)) return;
+      if (!(await ctx.ask(`Change "${s.task}" from ${s.current} to ${s.suggested} ${s.unit} per hour?\n\n${s.why}`, { title: 'Apply suggested rate?', ok: 'Apply' }))) return;
       applySuggestion(C, s);
       ctx.saveCompany();
       ctx.toast('Rate updated and logged');
@@ -251,7 +251,7 @@ export function viewPricing(ctx) {
   $('#terms').addEventListener('input', onTerms);
   ctx.setLeaving(async () => { unbind(); await ctx.savePricebook(); });
   $('#reset').onclick = async () => {
-    if (!confirm('Reset all pricing settings to defaults?')) return;
+    if (!(await ctx.ask('Reset all pricing settings to defaults?', { ok: 'Reset', danger: true }))) return;
     S.pricebook = structuredClone(DEFAULT_PRICEBOOK);
     await ctx.savePricebook();
     viewPricing(ctx);
