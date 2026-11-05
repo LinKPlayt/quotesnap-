@@ -1,0 +1,10 @@
+{
+  "name": "QuoteSnap – Tree & Snow Estimates",
+  "short_name": "QuoteSnap",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f4f6f3",
+  "theme_color": "#1f5f3f",
+  "icons": [{ "src": "icons/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }]
+}

@@ -1,0 +1,11 @@
+{
+  "name": "quotesnap",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Photo-to-quote estimating app for tree care and snow removal contractors",
+  "scripts": {
+    "start": "python3 -m http.server 8080",
+    "test": "node --test tests/*.test.mjs"
+  }
+}

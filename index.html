@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>QuoteSnap</title>
+  <meta name="description" content="Snap photos, describe the job, send a professional tree care or snow removal quote in minutes." />
+  <meta name="theme-color" content="#1f5f3f" />
+  <link rel="manifest" href="manifest.webmanifest" />
+  <link rel="icon" href="icons/icon.svg" type="image/svg+xml" />
+  <link rel="apple-touch-icon" href="icons/icon.svg" />
+  <link rel="stylesheet" href="css/styles.css" />
+</head>
+<body>
+  <header class="topbar no-print">
+    <a href="#/" class="brand"><img src="icons/icon.svg" alt="" width="28" height="28" /> QuoteSnap</a>
+    <nav class="nav" id="nav">
+      <a href="#/" data-route="dashboard">Dashboard</a>
+      <a href="#/estimates" data-route="estimates">Quotes</a>
+      <a href="#/customers" data-route="customers">Customers</a>
+      <a href="#/pricebook" data-route="pricebook">Price Book</a>
+      <a href="#/settings" data-route="settings">Settings</a>
+    </nav>
+    <a href="#/new" class="btn primary new-btn">+ New Quote</a>
+  </header>
+
+  <main id="app" class="app"></main>
+
+  <nav class="tabbar no-print" id="tabbar">
+    <a href="#/" data-route="dashboard"><span>▦</span>Home</a>
+    <a href="#/estimates" data-route="estimates"><span>☰</span>Quotes</a>
+    <a href="#/new" data-route="new" class="tab-new"><span>＋</span>New</a>
+    <a href="#/customers" data-route="customers"><span>☺</span>Customers</a>
+    <a href="#/settings" data-route="settings"><span>⚙</span>More</a>
+  </nav>
+
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  <dialog id="modal" class="modal"></dialog>
+
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>
