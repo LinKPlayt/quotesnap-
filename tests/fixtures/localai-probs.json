@@ -1,0 +1,1072 @@
+{
+ "_comment": "Real TinyCLIP-8M scores (models/tinyclip-vit-8m-16) for Creative Commons test photos. Photos are not stored here, only the model output.",
+ "photos": {
+  "oak_5": {
+   "source": "https://www.flickr.com/photos/12806074@N08/2497833384",
+   "license": "by-sa",
+   "probs": {
+    "scene": {
+     "tree": 0.9961,
+     "snow": 0.0006,
+     "other": 0.0033
+    },
+    "form": {
+     "standing": 0.9456,
+     "fallen": 0.0431,
+     "stump": 0.0087,
+     "hedge": 0.0007,
+     "closeup": 0.0019
+    },
+    "condition": {
+     "healthy": 0.3985,
+     "dead": 0.307,
+     "bare": 0.0286,
+     "storm": 0.2658
+    },
+    "species": {
+     "oak": 0.4641,
+     "maple": 0.0208,
+     "pine": 0.0645,
+     "spruce": 0.0156,
+     "birch": 0.0012,
+     "willow": 0.0081,
+     "palm": 0.0029,
+     "ash": 0.1396,
+     "elm": 0.2832
+    },
+    "size": {
+     "15": 0.1058,
+     "30": 0.5317,
+     "50": 0.2298,
+     "75": 0.1327
+    },
+    "proximity": {
+     "overHouse": 0.0426,
+     "nearStructure": 0.5561,
+     "clear": 0.3975,
+     "forest": 0.0038
+    },
+    "powerLines": {
+     "yes": 0.1168,
+     "no": 0.8832
+    },
+    "leaning": {
+     "yes": 0.5683,
+     "no": 0.4317
+    },
+    "fence": {
+     "yes": 0.1622,
+     "no": 0.8378
+    },
+    "access": {
+     "backyard": 0.0058,
+     "driveway": 0.852,
+     "open": 0.1417,
+     "tight": 0.0005
+    },
+    "surface": {
+     "driveway": 0.0607,
+     "lot": 0.6531,
+     "sidewalk": 0.1646,
+     "roof": 0.0521,
+     "street": 0.0696
+    },
+    "area": {
+     "500": 0.0527,
+     "1000": 0.078,
+     "2500": 0.3569,
+     "10000": 0.2701,
+     "40000": 0.2423
+    },
+    "depth": {
+     "1": 0.5028,
+     "4": 0.3934,
+     "10": 0.0658,
+     "18": 0.0379
+    },
+    "ice": {
+     "yes": 0.0229,
+     "no": 0.9771
+    },
+    "cars": {
+     "many": 0.0513,
+     "few": 0.9487
+    },
+    "walks": {
+     "yes": 0.4411,
+     "no": 0.5589
+    }
+   }
+  },
+  "maple_0": {
+   "source": "https://www.flickr.com/photos/42931449@N07/6815004908",
+   "license": "by",
+   "probs": {
+    "scene": {
+     "tree": 0.9943,
+     "snow": 0.0002,
+     "other": 0.0056
+    },
+    "form": {
+     "standing": 0.9436,
+     "fallen": 0.0145,
+     "stump": 0.0292,
+     "hedge": 0.0012,
+     "closeup": 0.0115
+    },
+    "condition": {
+     "healthy": 0.3752,
+     "dead": 0.0348,
+     "bare": 0.5683,
+     "storm": 0.0217
+    },
+    "species": {
+     "oak": 0.2331,
+     "maple": 0.4133,
+     "pine": 0.0135,
+     "spruce": 0.0165,
+     "birch": 0.0096,
+     "willow": 0.0047,
+     "palm": 0.001,
+     "ash": 0.109,
+     "elm": 0.1994
+    },
+    "size": {
+     "15": 0.2656,
+     "30": 0.4349,
+     "50": 0.1563,
+     "75": 0.1432
+    },
+    "proximity": {
+     "overHouse": 0.0325,
+     "nearStructure": 0.1215,
+     "clear": 0.7787,
+     "forest": 0.0674
+    },
+    "powerLines": {
+     "yes": 0.042,
+     "no": 0.958
+    },
+    "leaning": {
+     "yes": 0.4649,
+     "no": 0.5351
+    },
+    "fence": {
+     "yes": 0.0798,
+     "no": 0.9202
+    },
+    "access": {
+     "backyard": 0.0003,
+     "driveway": 0.0804,
+     "open": 0.9191,
+     "tight": 0.0002
+    },
+    "surface": {
+     "driveway": 0.0582,
+     "lot": 0.5365,
+     "sidewalk": 0.1474,
+     "roof": 0.0888,
+     "street": 0.1692
+    },
+    "area": {
+     "500": 0.0354,
+     "1000": 0.1123,
+     "2500": 0.4317,
+     "10000": 0.2049,
+     "40000": 0.2158
+    },
+    "depth": {
+     "1": 0.7062,
+     "4": 0.217,
+     "10": 0.0612,
+     "18": 0.0155
+    },
+    "ice": {
+     "yes": 0.0121,
+     "no": 0.9879
+    },
+    "cars": {
+     "many": 0.1897,
+     "few": 0.8103
+    },
+    "walks": {
+     "yes": 0.4139,
+     "no": 0.5861
+    }
+   }
+  },
+  "palm_3": {
+   "source": "https://www.flickr.com/photos/23346512@N04/3694739568",
+   "license": "by",
+   "probs": {
+    "scene": {
+     "tree": 0.9726,
+     "snow": 0.0003,
+     "other": 0.0271
+    },
+    "form": {
+     "standing": 0.8807,
+     "fallen": 0.0215,
+     "stump": 0.0332,
+     "hedge": 0.0627,
+     "closeup": 0.0019
+    },
+    "condition": {
+     "healthy": 0.7948,
+     "dead": 0.1052,
+     "bare": 0.0416,
+     "storm": 0.0583
+    },
+    "species": {
+     "oak": 0.0659,
+     "maple": 0.0036,
+     "pine": 0.2728,
+     "spruce": 0.0491,
+     "birch": 0.0002,
+     "willow": 0.0166,
+     "palm": 0.5058,
+     "ash": 0.0511,
+     "elm": 0.0349
+    },
+    "size": {
+     "15": 0.087,
+     "30": 0.2458,
+     "50": 0.3359,
+     "75": 0.3313
+    },
+    "proximity": {
+     "overHouse": 0.0642,
+     "nearStructure": 0.1445,
+     "clear": 0.768,
+     "forest": 0.0233
+    },
+    "powerLines": {
+     "yes": 0.1289,
+     "no": 0.8711
+    },
+    "leaning": {
+     "yes": 0.5538,
+     "no": 0.4462
+    },
+    "fence": {
+     "yes": 0.138,
+     "no": 0.862
+    },
+    "access": {
+     "backyard": 0.0119,
+     "driveway": 0.1641,
+     "open": 0.8209,
+     "tight": 0.003
+    },
+    "surface": {
+     "driveway": 0.087,
+     "lot": 0.1395,
+     "sidewalk": 0.0715,
+     "roof": 0.3671,
+     "street": 0.3348
+    },
+    "area": {
+     "500": 0.049,
+     "1000": 0.1346,
+     "2500": 0.6347,
+     "10000": 0.0888,
+     "40000": 0.0929
+    },
+    "depth": {
+     "1": 0.2197,
+     "4": 0.585,
+     "10": 0.1111,
+     "18": 0.0842
+    },
+    "ice": {
+     "yes": 0.0022,
+     "no": 0.9978
+    },
+    "cars": {
+     "many": 0.293,
+     "few": 0.707
+    },
+    "walks": {
+     "yes": 0.518,
+     "no": 0.482
+    }
+   }
+  },
+  "stump_1": {
+   "source": "https://www.flickr.com/photos/44718043@N06/4213233972",
+   "license": "by-nc",
+   "probs": {
+    "scene": {
+     "tree": 0.4632,
+     "snow": 0.0665,
+     "other": 0.4703
+    },
+    "form": {
+     "standing": 0.0372,
+     "fallen": 0.0256,
+     "stump": 0.6214,
+     "hedge": 0.0007,
+     "closeup": 0.3151
+    },
+    "condition": {
+     "healthy": 0.2477,
+     "dead": 0.1691,
+     "bare": 0.1334,
+     "storm": 0.4498
+    },
+    "species": {
+     "oak": 0.05,
+     "maple": 0.0387,
+     "pine": 0.1963,
+     "spruce": 0.1272,
+     "birch": 0.0271,
+     "willow": 0.0126,
+     "palm": 0.2376,
+     "ash": 0.2619,
+     "elm": 0.0488
+    },
+    "size": {
+     "15": 0.597,
+     "30": 0.2197,
+     "50": 0.097,
+     "75": 0.0863
+    },
+    "proximity": {
+     "overHouse": 0.424,
+     "nearStructure": 0.3394,
+     "clear": 0.1165,
+     "forest": 0.1201
+    },
+    "powerLines": {
+     "yes": 0.322,
+     "no": 0.678
+    },
+    "leaning": {
+     "yes": 0.1949,
+     "no": 0.8051
+    },
+    "fence": {
+     "yes": 0.4855,
+     "no": 0.5145
+    },
+    "access": {
+     "backyard": 0.0808,
+     "driveway": 0.4948,
+     "open": 0.3305,
+     "tight": 0.0939
+    },
+    "surface": {
+     "driveway": 0.0685,
+     "lot": 0.2196,
+     "sidewalk": 0.2686,
+     "roof": 0.3374,
+     "street": 0.1058
+    },
+    "area": {
+     "500": 0.0448,
+     "1000": 0.1212,
+     "2500": 0.2402,
+     "10000": 0.3033,
+     "40000": 0.2904
+    },
+    "depth": {
+     "1": 0.4708,
+     "4": 0.3093,
+     "10": 0.1676,
+     "18": 0.0523
+    },
+    "ice": {
+     "yes": 0.8149,
+     "no": 0.1851
+    },
+    "cars": {
+     "many": 0.1451,
+     "few": 0.8549
+    },
+    "walks": {
+     "yes": 0.5936,
+     "no": 0.4064
+    }
+   }
+  },
+  "onhouse_0": {
+   "source": "https://www.flickr.com/photos/31355686@N00/7583624082",
+   "license": "by-nc-sa",
+   "probs": {
+    "scene": {
+     "tree": 0.9704,
+     "snow": 0.0025,
+     "other": 0.0271
+    },
+    "form": {
+     "standing": 0.1982,
+     "fallen": 0.7492,
+     "stump": 0.0279,
+     "hedge": 0.0233,
+     "closeup": 0.0013
+    },
+    "condition": {
+     "healthy": 0.2174,
+     "dead": 0.1952,
+     "bare": 0.008,
+     "storm": 0.5794
+    },
+    "species": {
+     "oak": 0.1551,
+     "maple": 0.0768,
+     "pine": 0.131,
+     "spruce": 0.1017,
+     "birch": 0.0075,
+     "willow": 0.0238,
+     "palm": 0.0108,
+     "ash": 0.154,
+     "elm": 0.3392
+    },
+    "size": {
+     "15": 0.0692,
+     "30": 0.4798,
+     "50": 0.3633,
+     "75": 0.0877
+    },
+    "proximity": {
+     "overHouse": 0.0673,
+     "nearStructure": 0.9029,
+     "clear": 0.0292,
+     "forest": 0.0006
+    },
+    "powerLines": {
+     "yes": 0.6276,
+     "no": 0.3724
+    },
+    "leaning": {
+     "yes": 0.8227,
+     "no": 0.1773
+    },
+    "fence": {
+     "yes": 0.4536,
+     "no": 0.5464
+    },
+    "access": {
+     "backyard": 0.0468,
+     "driveway": 0.9124,
+     "open": 0.0093,
+     "tight": 0.0314
+    },
+    "surface": {
+     "driveway": 0.1746,
+     "lot": 0.0872,
+     "sidewalk": 0.0241,
+     "roof": 0.3454,
+     "street": 0.3687
+    },
+    "area": {
+     "500": 0.3113,
+     "1000": 0.3342,
+     "2500": 0.236,
+     "10000": 0.0707,
+     "40000": 0.0478
+    },
+    "depth": {
+     "1": 0.429,
+     "4": 0.4878,
+     "10": 0.0408,
+     "18": 0.0424
+    },
+    "ice": {
+     "yes": 0.056,
+     "no": 0.944
+    },
+    "cars": {
+     "many": 0.5578,
+     "few": 0.4422
+    },
+    "walks": {
+     "yes": 0.2641,
+     "no": 0.7359
+    }
+   }
+  },
+  "willow_2": {
+   "source": "https://www.flickr.com/photos/104736837@N03/26264880836",
+   "license": "cc0",
+   "probs": {
+    "scene": {
+     "tree": 0.9986,
+     "snow": 0.0002,
+     "other": 0.0012
+    },
+    "form": {
+     "standing": 0.2405,
+     "fallen": 0.6898,
+     "stump": 0.0539,
+     "hedge": 0.0055,
+     "closeup": 0.0103
+    },
+    "condition": {
+     "healthy": 0.081,
+     "dead": 0.345,
+     "bare": 0.1781,
+     "storm": 0.3959
+    },
+    "species": {
+     "oak": 0.0791,
+     "maple": 0.0215,
+     "pine": 0.0038,
+     "spruce": 0.0066,
+     "birch": 0.0022,
+     "willow": 0.7325,
+     "palm": 0.0003,
+     "ash": 0.0231,
+     "elm": 0.1308
+    },
+    "size": {
+     "15": 0.34,
+     "30": 0.4281,
+     "50": 0.1534,
+     "75": 0.0785
+    },
+    "proximity": {
+     "overHouse": 0.081,
+     "nearStructure": 0.4365,
+     "clear": 0.4217,
+     "forest": 0.0607
+    },
+    "powerLines": {
+     "yes": 0.1272,
+     "no": 0.8728
+    },
+    "leaning": {
+     "yes": 0.6609,
+     "no": 0.3391
+    },
+    "fence": {
+     "yes": 0.3359,
+     "no": 0.6641
+    },
+    "access": {
+     "backyard": 0.0224,
+     "driveway": 0.5595,
+     "open": 0.4149,
+     "tight": 0.0032
+    },
+    "surface": {
+     "driveway": 0.1065,
+     "lot": 0.2488,
+     "sidewalk": 0.467,
+     "roof": 0.0667,
+     "street": 0.1109
+    },
+    "area": {
+     "500": 0.0866,
+     "1000": 0.1306,
+     "2500": 0.5735,
+     "10000": 0.1115,
+     "40000": 0.0978
+    },
+    "depth": {
+     "1": 0.4526,
+     "4": 0.2589,
+     "10": 0.1642,
+     "18": 0.1243
+    },
+    "ice": {
+     "yes": 0.0795,
+     "no": 0.9205
+    },
+    "cars": {
+     "many": 0.105,
+     "few": 0.895
+    },
+    "walks": {
+     "yes": 0.6008,
+     "no": 0.3992
+    }
+   }
+  },
+  "lot_snow_4": {
+   "source": "https://www.flickr.com/photos/193316968@N06/54592467667",
+   "license": "by",
+   "probs": {
+    "scene": {
+     "tree": 0.0008,
+     "snow": 0.9944,
+     "other": 0.0048
+    },
+    "form": {
+     "standing": 0.7057,
+     "fallen": 0.0914,
+     "stump": 0.0475,
+     "hedge": 0.1457,
+     "closeup": 0.0098
+    },
+    "condition": {
+     "healthy": 0.2514,
+     "dead": 0.1818,
+     "bare": 0.4412,
+     "storm": 0.1256
+    },
+    "species": {
+     "oak": 0.07,
+     "maple": 0.0609,
+     "pine": 0.0963,
+     "spruce": 0.0977,
+     "birch": 0.1824,
+     "willow": 0.0507,
+     "palm": 0.019,
+     "ash": 0.2709,
+     "elm": 0.152
+    },
+    "size": {
+     "15": 0.477,
+     "30": 0.1451,
+     "50": 0.1819,
+     "75": 0.1961
+    },
+    "proximity": {
+     "overHouse": 0.0383,
+     "nearStructure": 0.5348,
+     "clear": 0.4087,
+     "forest": 0.0181
+    },
+    "powerLines": {
+     "yes": 0.5794,
+     "no": 0.4206
+    },
+    "leaning": {
+     "yes": 0.2943,
+     "no": 0.7057
+    },
+    "fence": {
+     "yes": 0.0812,
+     "no": 0.9188
+    },
+    "access": {
+     "backyard": 0.0804,
+     "driveway": 0.7185,
+     "open": 0.1731,
+     "tight": 0.028
+    },
+    "surface": {
+     "driveway": 0.0035,
+     "lot": 0.9509,
+     "sidewalk": 0.0388,
+     "roof": 0.0009,
+     "street": 0.0059
+    },
+    "area": {
+     "500": 0.0121,
+     "1000": 0.0338,
+     "2500": 0.038,
+     "10000": 0.3699,
+     "40000": 0.5462
+    },
+    "depth": {
+     "1": 0.6875,
+     "4": 0.1501,
+     "10": 0.1063,
+     "18": 0.0561
+    },
+    "ice": {
+     "yes": 0.4977,
+     "no": 0.5023
+    },
+    "cars": {
+     "many": 0.0548,
+     "few": 0.9452
+    },
+    "walks": {
+     "yes": 0.1631,
+     "no": 0.8369
+    }
+   }
+  },
+  "driveway_snow_0": {
+   "source": "https://www.flickr.com/photos/66163349@N05/6727431999",
+   "license": "by",
+   "probs": {
+    "scene": {
+     "tree": 0.0096,
+     "snow": 0.9888,
+     "other": 0.0016
+    },
+    "form": {
+     "standing": 0.4496,
+     "fallen": 0.3366,
+     "stump": 0.0195,
+     "hedge": 0.1896,
+     "closeup": 0.0047
+    },
+    "condition": {
+     "healthy": 0.1953,
+     "dead": 0.1772,
+     "bare": 0.2078,
+     "storm": 0.4198
+    },
+    "species": {
+     "oak": 0.0422,
+     "maple": 0.1206,
+     "pine": 0.0396,
+     "spruce": 0.1385,
+     "birch": 0.1406,
+     "willow": 0.0388,
+     "palm": 0.014,
+     "ash": 0.1883,
+     "elm": 0.2773
+    },
+    "size": {
+     "15": 0.1491,
+     "30": 0.3674,
+     "50": 0.3093,
+     "75": 0.1741
+    },
+    "proximity": {
+     "overHouse": 0.0664,
+     "nearStructure": 0.894,
+     "clear": 0.0393,
+     "forest": 0.0004
+    },
+    "powerLines": {
+     "yes": 0.6869,
+     "no": 0.3131
+    },
+    "leaning": {
+     "yes": 0.6325,
+     "no": 0.3675
+    },
+    "fence": {
+     "yes": 0.4248,
+     "no": 0.5752
+    },
+    "access": {
+     "backyard": 0.0528,
+     "driveway": 0.8557,
+     "open": 0.0028,
+     "tight": 0.0887
+    },
+    "surface": {
+     "driveway": 0.2828,
+     "lot": 0.0311,
+     "sidewalk": 0.1285,
+     "roof": 0.0742,
+     "street": 0.4834
+    },
+    "area": {
+     "500": 0.1833,
+     "1000": 0.3419,
+     "2500": 0.4285,
+     "10000": 0.0305,
+     "40000": 0.0158
+    },
+    "depth": {
+     "1": 0.1339,
+     "4": 0.5062,
+     "10": 0.1279,
+     "18": 0.2321
+    },
+    "ice": {
+     "yes": 0.2304,
+     "no": 0.7696
+    },
+    "cars": {
+     "many": 0.5544,
+     "few": 0.4456
+    },
+    "walks": {
+     "yes": 0.1194,
+     "no": 0.8806
+    }
+   }
+  },
+  "icy_walk_2": {
+   "source": "https://www.flickr.com/photos/46104149@N07/5470756657",
+   "license": "by-nc-sa",
+   "probs": {
+    "scene": {
+     "tree": 0.028,
+     "snow": 0.9556,
+     "other": 0.0164
+    },
+    "form": {
+     "standing": 0.0628,
+     "fallen": 0.2771,
+     "stump": 0.2495,
+     "hedge": 0.004,
+     "closeup": 0.4066
+    },
+    "condition": {
+     "healthy": 0.0419,
+     "dead": 0.449,
+     "bare": 0.1072,
+     "storm": 0.402
+    },
+    "species": {
+     "oak": 0.0316,
+     "maple": 0.0525,
+     "pine": 0.047,
+     "spruce": 0.0518,
+     "birch": 0.2456,
+     "willow": 0.0827,
+     "palm": 0.0361,
+     "ash": 0.4037,
+     "elm": 0.0491
+    },
+    "size": {
+     "15": 0.7953,
+     "30": 0.1217,
+     "50": 0.0672,
+     "75": 0.0158
+    },
+    "proximity": {
+     "overHouse": 0.2112,
+     "nearStructure": 0.6062,
+     "clear": 0.1642,
+     "forest": 0.0183
+    },
+    "powerLines": {
+     "yes": 0.3729,
+     "no": 0.6271
+    },
+    "leaning": {
+     "yes": 0.5682,
+     "no": 0.4318
+    },
+    "fence": {
+     "yes": 0.2836,
+     "no": 0.7164
+    },
+    "access": {
+     "backyard": 0.0698,
+     "driveway": 0.7841,
+     "open": 0.091,
+     "tight": 0.0551
+    },
+    "surface": {
+     "driveway": 0.0575,
+     "lot": 0.152,
+     "sidewalk": 0.6231,
+     "roof": 0.1485,
+     "street": 0.019
+    },
+    "area": {
+     "500": 0.1088,
+     "1000": 0.064,
+     "2500": 0.3252,
+     "10000": 0.3313,
+     "40000": 0.1707
+    },
+    "depth": {
+     "1": 0.3946,
+     "4": 0.199,
+     "10": 0.1707,
+     "18": 0.2357
+    },
+    "ice": {
+     "yes": 0.9824,
+     "no": 0.0176
+    },
+    "cars": {
+     "many": 0.1285,
+     "few": 0.8715
+    },
+    "walks": {
+     "yes": 0.5375,
+     "no": 0.4625
+    }
+   }
+  },
+  "pine_1": {
+   "source": "https://www.flickr.com/photos/36307913@N00/1195568411",
+   "license": "by-sa",
+   "probs": {
+    "scene": {
+     "tree": 0.1402,
+     "snow": 0.0021,
+     "other": 0.8577
+    },
+    "form": {
+     "standing": 0.752,
+     "fallen": 0.0396,
+     "stump": 0.1219,
+     "hedge": 0.0154,
+     "closeup": 0.0711
+    },
+    "condition": {
+     "healthy": 0.9294,
+     "dead": 0.0316,
+     "bare": 0.0104,
+     "storm": 0.0286
+    },
+    "species": {
+     "oak": 0.0434,
+     "maple": 0.0644,
+     "pine": 0.3411,
+     "spruce": 0.1341,
+     "birch": 0.0111,
+     "willow": 0.0029,
+     "palm": 0.2159,
+     "ash": 0.1544,
+     "elm": 0.0329
+    },
+    "size": {
+     "15": 0.395,
+     "30": 0.1535,
+     "50": 0.1544,
+     "75": 0.297
+    },
+    "proximity": {
+     "overHouse": 0.177,
+     "nearStructure": 0.2306,
+     "clear": 0.5363,
+     "forest": 0.0561
+    },
+    "powerLines": {
+     "yes": 0.1846,
+     "no": 0.8154
+    },
+    "leaning": {
+     "yes": 0.22,
+     "no": 0.78
+    },
+    "fence": {
+     "yes": 0.0508,
+     "no": 0.9492
+    },
+    "access": {
+     "backyard": 0.0163,
+     "driveway": 0.1613,
+     "open": 0.8117,
+     "tight": 0.0106
+    },
+    "surface": {
+     "driveway": 0.0166,
+     "lot": 0.3961,
+     "sidewalk": 0.1092,
+     "roof": 0.3379,
+     "street": 0.1401
+    },
+    "area": {
+     "500": 0.0172,
+     "1000": 0.0428,
+     "2500": 0.1314,
+     "10000": 0.462,
+     "40000": 0.3466
+    },
+    "depth": {
+     "1": 0.2877,
+     "4": 0.5186,
+     "10": 0.151,
+     "18": 0.0427
+    },
+    "ice": {
+     "yes": 0.0658,
+     "no": 0.9342
+    },
+    "cars": {
+     "many": 0.1797,
+     "few": 0.8203
+    },
+    "walks": {
+     "yes": 0.7465,
+     "no": 0.2535
+    }
+   }
+  },
+  "maple_2": {
+   "source": "https://www.flickr.com/photos/72511054@N00/16335230",
+   "license": "by",
+   "probs": {
+    "scene": {
+     "tree": 0.9943,
+     "snow": 0.0003,
+     "other": 0.0055
+    },
+    "form": {
+     "standing": 0.1547,
+     "fallen": 0.0064,
+     "stump": 0.0444,
+     "hedge": 0.0035,
+     "closeup": 0.791
+    },
+    "condition": {
+     "healthy": 0.7272,
+     "dead": 0.0886,
+     "bare": 0.0247,
+     "storm": 0.1595
+    },
+    "species": {
+     "oak": 0.0768,
+     "maple": 0.338,
+     "pine": 0.0313,
+     "spruce": 0.0757,
+     "birch": 0.1484,
+     "willow": 0.0122,
+     "palm": 0.0016,
+     "ash": 0.1511,
+     "elm": 0.165
+    },
+    "size": {
+     "15": 0.7732,
+     "30": 0.1465,
+     "50": 0.0663,
+     "75": 0.014
+    },
+    "proximity": {
+     "overHouse": 0.0402,
+     "nearStructure": 0.5146,
+     "clear": 0.2271,
+     "forest": 0.2181
+    },
+    "powerLines": {
+     "yes": 0.1995,
+     "no": 0.8005
+    },
+    "leaning": {
+     "yes": 0.3664,
+     "no": 0.6336
+    },
+    "fence": {
+     "yes": 0.4763,
+     "no": 0.5237
+    },
+    "access": {
+     "backyard": 0.0393,
+     "driveway": 0.717,
+     "open": 0.2315,
+     "tight": 0.0122
+    },
+    "surface": {
+     "driveway": 0.0615,
+     "lot": 0.1469,
+     "sidewalk": 0.5205,
+     "roof": 0.1191,
+     "street": 0.1519
+    },
+    "area": {
+     "500": 0.038,
+     "1000": 0.0618,
+     "2500": 0.5461,
+     "10000": 0.2522,
+     "40000": 0.1019
+    },
+    "depth": {
+     "1": 0.36,
+     "4": 0.5256,
+     "10": 0.0976,
+     "18": 0.0168
+    },
+    "ice": {
+     "yes": 0.4001,
+     "no": 0.5999
+    },
+    "cars": {
+     "many": 0.1439,
+     "few": 0.8561
+    },
+    "walks": {
+     "yes": 0.7512,
+     "no": 0.2488
+    }
+   }
+  }
+ }
+}

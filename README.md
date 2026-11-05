@@ -24,7 +24,8 @@ QuoteSnap builds:
 | Area | What you get |
 |---|---|
 | Snap & go | One tap opens the camera, photos analyze automatically, the address fills in from GPS, and miles are worked out from your shop |
-| ✨ AI photo analysis | Claude fills in division, every tree (species, height, trunk, condition), access, hazards, debris and stumps, or snow area, sidewalks, roof, salt and obstacles. It also writes photo captions for the PDF, a customer summary, things to check on site, what it couldn't tell, and extra work to offer (one-tap **+ Add**). AI-filled fields are outlined in purple, anything you change is never overwritten, and **Undo** reverts it all. Pricing always comes from your price book |
+| 🧠 On-device AI (default) | Runs in the browser: free, private, no API key, works offline. Fills in job type, species, dead/fallen trees, stumps, power lines, house nearby, fence, rough height, access, snow surface, ice and lot size, plus photo captions, what to confirm, and suggested extras. See **On-device AI** below |
+| ✨ Claude cloud AI (optional) | Off unless you choose it in Settings. Claude fills in division, every tree (species, height, trunk, condition), access, hazards, debris and stumps, or snow area, sidewalks, roof, salt and obstacles. It also writes photo captions for the PDF, a customer summary, things to check on site, what it couldn't tell, and extra work to offer (one-tap **+ Add**). AI-filled fields are outlined in purple, anything you change is never overwritten, and **Undo** reverts it all. Pricing always comes from your price book |
 | Hands-free | 🎤 Talk instead of typing. Notes are read as you go: tree size, species, access, hazards, plus the customer's name, phone, email and street address. Quick-pick chips for heights, species and driveway sizes. 📇 Pick from contacts on Android |
 | Weather | 7-day snow and wind forecast on the home screen with storm alerts ("6" Saturday", "gusts 52 mph: expect storm calls"). Snow quotes offer to price at the forecast depth |
 | Send | **Send PDF + message** opens the share sheet with a real PDF already attached (Messages, Mail, WhatsApp). Quote, follow-up, invoice and review-request messages. Online payment link on quotes and invoices |
@@ -56,17 +57,40 @@ Each phone keeps its own quotes. Use **Settings → Backup / Restore** to move d
 
 Tip: **Settings → Load sample quotes** fills the app with demo data.
 
-### Turn on automatic photo analysis
+### Photo analysis: nothing to set up
 
-1. Get an API key at <https://platform.claude.com/settings/keys>.
-2. In the app: **Settings → ✨ Automatic photo analysis**, paste the key, then tap **Test key**.
-3. Leave **Analyze photos automatically** on. Every photo you snap now fills in the quote.
-
-Do this on each phone that will snap jobs. The key is stored only on that device and goes straight to Anthropic. It is left out of backups. Each analysis is a few cents of API usage. Opus 5.5 is the most accurate; Sonnet 5.5 and Haiku 5.5 are faster and cheaper.
+Photo analysis works out of the box with the **on-device AI**: no account, no API key, no cost. The first time the app opens it downloads the AI in the background (about 10 MB of model plus a 14–27 MB runtime, served from this repository), and from then on it works offline.
 
 Also set **Settings → 📍 Location → Set shop from business address** so the distance to each job fills in by itself.
 
-Under the hood, the app uses the official Anthropic SDK with structured JSON output (a strict schema) and server-side refusal fallback. The default model is `claude-opus-5-5`.
+**Optional: Claude cloud AI.** For more detailed analysis (reads your notes, estimates trunk size, writes richer captions), pick **Claude cloud AI** in **Settings → ✨ Automatic photo analysis**, paste an Anthropic API key (<https://platform.claude.com/settings/keys>) and tap **Test key**. This sends photos to Anthropic and costs a few cents per analysis, so it is off unless you choose it. The key stays on that device and is left out of backups. The app never falls back to it on its own.
+
+## On-device AI
+
+The default photo analysis runs entirely on the phone or computer. Photos are never uploaded.
+
+```
+photo (existing camera / gallery input, already shrunk to 1280 px)
+  → js/localai/manager.js   center-crop, resize to 224×224, normalize, + mirrored copy
+  → js/localai/worker.js    Web Worker: ONNX Runtime Web, WebGPU → WebAssembly fallback
+                            TinyCLIP image encoder → 512-number image embedding
+                            compared with pre-computed text embeddings for 59 answers to 16 questions
+  → js/localai/interpret.js scores → quote fields (only what the photo shows; notes always win)
+  → existing review card, purple outlines, Undo, pricing engine
+```
+
+| | |
+|---|---|
+| Model | **TinyCLIP ViT-8M/16** image encoder (Microsoft, **MIT license**, commercial use allowed), exported to ONNX, 8-bit weights (`MatMulNBits`): **10.3 MB** at `models/tinyclip-vit-8m-16/` |
+| Runtime | ONNX Runtime Web 1.30.0 (MIT), vendored in `js/vendor/ort-1.30.0/`. WebGPU devices load the WebGPU build (26.8 MB, ~6.6 MB compressed); others load the CPU build (14.2 MB, ~3.7 MB compressed). Each device downloads only one |
+| Speed | About 0.5 s per photo on a laptop CPU with WebAssembly once loaded |
+| Questions | `tools/local-ai-questions.json`: tree vs snow vs not-a-job-photo, standing/fallen/stump/hedge/close-up, healthy/dead/bare/storm-damaged, 9 species, size, over/near the house, power lines, leaning, fence, access, snow surface, paved area, snow depth, ice, parked cars, sidewalks |
+| Accuracy | Tested on 96 hand-checked Creative Commons photos: job type 67/70, species 20/23 (misses: spruce read as pine, one birch), dead vs healthy 24/26, stumps 14/15, power lines 0.70–0.77 when present vs 0.04–0.13 when absent. Height, driveway size and snow depth are rough, so the app always asks you to confirm them |
+| Privacy | No image, thumbnail, embedding or request leaves the device. The only network use is the one-time download of the model files from this site |
+| Offline | Model, labels and runtime are stored with the Cache API (`quotesnap-ai-v1`). `sw.js` serves them cache-first. URLs carry the file's checksum, so an update downloads the new version and old ones are deleted |
+| Robustness | Checksums verify downloads; a corrupt or truncated file is deleted and re-downloaded. Out-of-memory, unsupported browser (needs WebAssembly SIMD: iOS 16.4+, Chrome/Edge 91+, Safari 16.4+), offline first run and unreadable photos each show a clear message, and the rest of the app keeps working |
+
+**Rebuilding the AI files** (only if you change the questions or the model): `npm run build:ai` (after `pip install torch transformers onnx onnxruntime onnxscript numpy pillow`). It exports and quantizes the model at a pinned revision, checks it against the original, re-embeds the prompts, and writes `config.json` with checksums.
 
 ## How pricing works
 
@@ -81,7 +105,8 @@ Every rate lives in the Price Book, so the numbers match *your* business.
 ## Develop
 
 ```bash
-npm test             # node --test: engine unit tests
+npm test             # node --test: engine, auto-fill and on-device AI interpretation tests
+npm run build:ai     # optional: rebuild models/tinyclip-vit-8m-16 (Python, see On-device AI)
 ```
 
 ```
@@ -90,7 +115,11 @@ css/styles.css       UI + print (PDF) styles, light/dark
 js/app.js            views: dashboard, editor, documents, send/sign, price book, settings
 js/engine.js         parsing + estimating engine (no DOM)
 js/pricebook.js      default rates
-js/ai.js             Claude photo analysis (schema + prompt)
+js/ai.js             optional Claude cloud photo analysis (schema + prompt)
+js/localai/          on-device AI: manager (page side), worker (ONNX Runtime), interpret (scores → fields)
+models/              on-device AI model, labels and config (+ license)
+tools/               build_local_ai.py + the question list used to make models/
+js/vendor/ort-1.30.0 ONNX Runtime Web (MIT)
 js/geo.js            GPS, address lookup (OpenStreetMap), distance, forecast (Open-Meteo)
 js/pdf.js            real PDF files for sharing (vendored jsPDF + html2canvas, MIT)
 js/store.js          IndexedDB storage (memory fallback) + image compression

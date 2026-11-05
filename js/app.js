@@ -6,6 +6,8 @@ import {
 import { analyzeJob, aiToParsed, testKey, DEFAULT_MODEL } from './ai.js';
 import { getPosition, reverseGeocode, geocode, roadMiles, forecast, stormAlerts, dayName } from './geo.js';
 import { makePdf } from './pdf.js';
+import { localAI } from './localai/manager.js';
+import { interpret } from './localai/interpret.js';
 
 // ---------------------------------------------------------------- state
 
@@ -20,7 +22,7 @@ const pendingSnap = new Set(); // estimates just created from the camera: auto-a
 
 const DEFAULT_SETTINGS = {
   business: { name: 'Your Tree & Snow Co.', owner: '', phone: '', email: '', address: '', website: '', license: '', insurance: '', logo: '', color: '#1f5f3f', payLink: '', reviewLink: '' },
-  ai: { apiKey: '', model: DEFAULT_MODEL, auto: true },
+  ai: { engine: 'local', processor: 'auto', apiKey: '', model: DEFAULT_MODEL, auto: true }, // engine: 'local' (on-device, default) | 'cloud' (Claude, opt-in)
   geo: { autoLocate: true, shop: null, home: null },
   sendVia: 'share',
   prefix: 'Q',
@@ -75,6 +77,8 @@ async function getPhoto(id) {
 async function addPhotos(est, files) {
   let n = 0;
   for (const f of files) {
+    if (f.type && !f.type.startsWith('image/')) { toast(`${f.name || 'That file'} is not a photo`); continue; }
+    if (f.size > 60e6) { toast(`${f.name || 'That photo'} is too large (over 60 MB)`); continue; }
     try {
       const data = await compressImage(f);
       const pid = uid();
@@ -82,7 +86,7 @@ async function addPhotos(est, files) {
       S.photos.set(pid, data);
       est.photos.push(pid);
       n++;
-    } catch { toast('Could not read one of the photos'); }
+    } catch { toast('Could not read one of the photos. Try a JPG or PNG.'); }
   }
   return n;
 }
@@ -166,10 +170,11 @@ function isEmptyDraft(e) {
 // ---------------------------------------------------------------- AI photo analysis
 
 const aiKey = (est) => est.photos.join(',') + '|' + (est.job.description || '').trim();
-const hasKey = () => !!S.settings.ai.apiKey;
+const isLocal = () => S.settings.ai.engine !== 'cloud';
+const aiOn = () => (isLocal() ? localAI.support.ok : !!S.settings.ai.apiKey); // is photo analysis available?
 
 function scheduleAi(est, delay = 1500) {
-  if (!hasKey() || !S.settings.ai.auto) return;
+  if (!aiOn() || !S.settings.ai.auto) return;
   if (!est.photos.length && !(est.job.description || '').trim()) return;
   clearTimeout(AI.timers.get(est.id));
   AI.timers.set(est.id, setTimeout(() => runAi(est.id, { auto: true }).finally(() => renderAiStatus()), delay));
@@ -179,21 +184,24 @@ async function runAi(id, { auto = false } = {}) {
   const live = () => (ED && ED.est.id === id ? ED.est : S.estimates.find((e) => e.id === id));
   const est = live();
   if (!est) return;
-  if (!hasKey()) { if (!auto) toast('Add your Anthropic API key in Settings → AI to turn on photo analysis'); return; }
-  if (!est.photos.length && !est.job.description.trim()) { if (!auto) toast('Snap a photo or add a note first'); return; }
+  if (!aiOn()) { if (!auto) toast(isLocal() ? localAI.support.reason : 'Add your Anthropic API key in Settings → AI, or switch to the on-device AI', 5000); return; }
+  if (!est.photos.length && (isLocal() || !est.job.description.trim())) { if (!auto) toast(isLocal() ? 'Add a photo first: the on-device AI reads photos' : 'Snap a photo or add a note first'); return; }
   if (auto && est.ai?.inputKey === aiKey(est)) return; // nothing new to look at
   if (AI.busy.has(id)) return;
   AI.busy.add(id);
   renderAiStatus();
   try {
     const photos = await Promise.all(est.photos.map(getPhoto));
-    const a = await analyzeJob({ apiKey: S.settings.ai.apiKey, model: S.settings.ai.model, notes: est.job.description, photos, division: est.job.division });
+    // on-device: photos are analyzed in this browser and never uploaded. cloud (opt-in): sent to Anthropic.
+    const a = isLocal()
+      ? interpret(await localAI.analyze(photos), { notes: est.job.description, division: est.job.division })
+      : await analyzeJob({ apiKey: S.settings.ai.apiKey, model: S.settings.ai.model, notes: est.job.description, photos, division: est.job.division });
     const target = live();
     if (!target) return;
     const n = applyAiResult(target, a);
     if (ED && ED.est.id === id) {
       refreshEditorAfterFill();
-      toast(n ? `✨ Filled in ${n} thing${n === 1 ? '' : 's'} from your photos. Review and send.` : '✨ Photos checked. Nothing new to change.');
+      toast(n ? `✨ Analysis complete: filled in ${n} thing${n === 1 ? '' : 's'}. Review and send.` : '✨ Analysis complete. Nothing new to change.');
     } else {
       await persist(target);
     }
@@ -225,6 +233,7 @@ function applyAiResult(est, a) {
   else est.aiFields = (est.aiFields || []).filter((p) => !est.locks[p]);
   if (changes.length) est.selectedOption = null;
   est.ai = {
+    engine: a.engine || 'cloud',
     at: new Date().toISOString(),
     inputKey: aiKey(est),
     confidence: a.confidence,
@@ -240,6 +249,30 @@ function applyAiResult(est, a) {
   logHistory(est, changes.length ? `AI filled ${changes.length} field(s) from ${est.photos.length} photo(s)` : 'AI re-checked photos: no changes');
   return changes.length;
 }
+
+function aiStatusText(st = localAI.state) {
+  if (!isLocal()) return S.settings.ai.apiKey ? '✨ Claude cloud AI is on (photos are sent to Anthropic)' : '';
+  if (!localAI.support.ok) return '⚠ ' + localAI.support.reason;
+  const where = st.backend === 'webgpu' ? 'GPU' : st.backend === 'wasm' ? 'CPU' : '';
+  switch (st.phase) {
+    case 'loading': return `Loading AI… ${st.progress || 0}%${st.mb && st.progress < 100 ? ` of ${st.mb} MB (one time only)` : ''}`;
+    case 'downloaded': return '✓ On-device AI ready, works offline';
+    case 'ready': return `✓ AI ready, works offline${where ? ` (${where})` : ''}`;
+    case 'analyzing': return `Analyzing image ${st.index} of ${st.total}…`;
+    case 'error': return '⚠ ' + st.message;
+    default: return 'On-device AI: downloads the first time you analyze a photo';
+  }
+}
+function renderAiChip() {
+  const el = $('#aichip');
+  if (el) el.textContent = aiStatusText();
+}
+localAI.onStatus(() => {
+  renderAiChip();
+  const el = $('#aistat');
+  if (el) el.textContent = aiStatusText();
+  if (ED && AI.busy.has(ED.est.id)) renderAiStatus();
+});
 
 // ---------------------------------------------------------------- location
 
@@ -381,14 +414,17 @@ function viewDashboard() {
       <label class="snap-btn">
         <input type="file" accept="image/*" capture="environment" multiple hidden id="snapcam">
         <span class="snap-icon">📸</span>
-        <span><b>Snap a job</b><br><span class="small">${hasKey() ? 'Take photos and AI fills in the quote' : 'Take photos to start a quote'}</span></span>
+        <span><b>Snap a job</b><br><span class="small">${aiOn() ? 'Take photos and AI fills in the quote' : 'Take photos to start a quote'}</span></span>
       </label>
       <div class="hero-alt">
         <label class="btn"><input type="file" accept="image/*" multiple hidden id="snapgal">🖼 From photos</label>
         <a class="btn" href="#/new?d=tree">🌳 Tree quote</a>
         <a class="btn snowbtn" href="#/new?d=snow">❄ Snow quote</a>
       </div>
-      ${hasKey() ? '' : `<div class="callout ai small" style="margin-top:.75rem">✨ <b>Turn on automatic photo analysis.</b> Add an Anthropic API key in <a href="#/settings">Settings</a> and QuoteSnap fills in tree size, species, hazards, access and snow area straight from your photos.</div>`}
+      <div class="tiny muted" id="aichip" style="margin-top:.6rem"></div>
+      ${aiOn() ? '' : isLocal()
+        ? `<div class="callout small" style="margin-top:.75rem">⚠ ${esc(localAI.support.reason)}</div>`
+        : `<div class="callout ai small" style="margin-top:.75rem">✨ <b>Turn on automatic photo analysis.</b> Add an Anthropic API key in <a href="#/settings">Settings</a>, or switch to the free on-device AI.</div>`}
     </div>
 
     <div id="wx"></div>
@@ -414,6 +450,7 @@ function viewDashboard() {
     ${S.settings.business.name === DEFAULT_SETTINGS.business.name ? `<div class="callout">Set your business name, logo and phone in <a href="#/settings">Settings</a>, and your wages and equipment rates in the <a href="#/pricebook">Price Book</a>, so quotes match your numbers.</div>` : ''}
   `;
   for (const id of ['snapcam', 'snapgal']) $('#' + id).onchange = (ev) => createFromPhotos([...ev.target.files]);
+  renderAiChip();
   hydrateThumbs();
   renderWeather(st);
 }
@@ -660,8 +697,8 @@ async function viewEditor(id) {
   if (pendingSnap.has(id)) {
     pendingSnap.delete(id);
     if (S.settings.geo.autoLocate) locateInto(e, { auto: true });
-    if (hasKey() && S.settings.ai.auto) runAi(id, { auto: true });
-  } else if (hasKey() && S.settings.ai.auto && e.photos.length && !e.ai) {
+    if (aiOn() && S.settings.ai.auto) runAi(id, { auto: true });
+  } else if (aiOn() && S.settings.ai.auto && e.photos.length && !e.ai) {
     scheduleAi(e, 300);
   }
 }
@@ -685,7 +722,7 @@ async function renderPhotos() {
     changed();
     renderPhotos();
     scheduleAi(e);
-    if (hasKey() && S.settings.ai.auto) renderAiStatus(true);
+    if (aiOn() && S.settings.ai.auto) renderAiStatus(true);
   };
   $('#file').onchange = onFiles;
   $('#file2').onchange = onFiles;
@@ -704,7 +741,17 @@ function renderAiStatus(queued = false) {
   if (!el || !ED) return;
   const e = ED.est;
   if (AI.busy.has(e.id) || queued) {
-    el.innerHTML = `<div class="ai-status"><span class="spin"></span> ✨ Looking at ${e.photos.length} photo${e.photos.length === 1 ? '' : 's'}… measuring, spotting hazards, filling in the quote (usually 10–40 s). You can keep working.</div>`;
+    let text = `✨ Looking at ${e.photos.length} photo${e.photos.length === 1 ? '' : 's'}… measuring, spotting hazards, filling in the quote (usually 10–40 s). You can keep working.`;
+    if (isLocal()) {
+      const st = localAI.state;
+      text = st.phase === 'loading'
+        ? `Loading AI… ${st.progress || 0}%${st.mb && st.progress < 100 ? ` (one-time ${st.mb} MB download, then it works offline)` : ''}`
+        : st.phase === 'analyzing' ? `Analyzing image ${st.index} of ${st.total} on this device…` : 'Analyzing image on this device…';
+    }
+    el.innerHTML = `<div class="ai-status"><span class="spin"></span> ${text}</div>`;
+  } else if (isLocal() && localAI.state.phase === 'error' && ED.est.photos.length) {
+    el.innerHTML = `<div class="callout small">⚠ ${esc(localAI.state.message)} <button class="btn sm" id="airetry">Try again</button></div>`;
+    $('#airetry').onclick = () => runAi(e.id, { auto: false });
   } else el.innerHTML = '';
   const btn = $('#aibtn');
   if (btn) { btn.disabled = AI.busy.has(e.id); btn.textContent = AI.busy.has(e.id) ? '✨ Analyzing…' : e.ai ? '✨ Re-analyze' : '✨ Analyze photos'; }
@@ -716,14 +763,16 @@ function renderAiOut() {
   const e = ED.est;
   const a = e.ai;
   if (!a) {
-    el.innerHTML = hasKey()
-      ? (e.photos.length ? '' : '<div class="callout ai small">📸 Add photos and AI fills in the job by itself. No typing needed.</div>')
-      : '<div class="callout ai small">✨ <b>Want this filled in automatically?</b> Add an Anthropic API key in <a href="#/settings">Settings → AI</a>. Then every photo you snap fills in tree size, species, hazards, access, snow area and more.</div>';
+    el.innerHTML = aiOn()
+      ? (e.photos.length ? '' : `<div class="callout ai small">📸 Add photos and AI fills in the job by itself. No typing needed.${isLocal() ? ' Runs on this device: free, private, works offline.' : ''}</div>`)
+      : isLocal()
+        ? `<div class="callout small">⚠ ${esc(localAI.support.reason)}</div>`
+        : '<div class="callout ai small">✨ <b>Want this filled in automatically?</b> Add an Anthropic API key in <a href="#/settings">Settings → AI</a>, or switch to the free on-device AI.</div>';
     return;
   }
   const conf = { high: 'High confidence', medium: 'Medium confidence', low: 'Low confidence: double-check' }[a.confidence] || '';
   el.innerHTML = `<div class="ai-card">
-    <div class="row"><b>✨ AI filled in ${a.changes.length} thing${a.changes.length === 1 ? '' : 's'}</b>${conf ? `<span class="badge conf-${a.confidence}">${conf}</span>` : ''}<div class="spacer"></div>
+    <div class="row"><b>✨ ${a.engine === 'local' ? 'On-device AI' : 'AI'} filled in ${a.changes.length} thing${a.changes.length === 1 ? '' : 's'}</b>${conf ? `<span class="badge conf-${a.confidence}">${conf}</span>` : ''}<div class="spacer"></div>
       ${a.undo ? '<button class="btn sm" id="aiundo">Undo</button>' : ''}</div>
     ${a.changes.length ? `<div class="chips" style="margin:.5rem 0">${a.changes.slice(0, 18).map((c) => `<span class="ai-chip"><span class="muted">${esc(c.label)}</span> ${esc(c.to)}</span>`).join('')}</div>` : ''}
     ${a.customerSummary ? `<div class="small" style="margin:.35rem 0">${esc(a.customerSummary)}</div>` : ''}
@@ -1595,11 +1644,24 @@ function viewSettings() {
     <div class="grid g2 cols" style="align-items:start;margin-top:.75rem">
       <div>
         <div class="card"><h2>✨ Automatic photo analysis</h2>
-          <p class="muted small">Snap photos and Claude fills in the quote: tree height, trunk size, species, hazards, access, debris, snow area, sidewalks, plus photo captions, things to check and extra work to offer. Pricing always comes from your Price Book. The key is stored only on this device and sent only to Anthropic. Each analysis costs a few cents in API usage.</p>
-          <div class="grid">${f('Anthropic API key', 'ai.apiKey', 'password', 'sk-ant-…')}
-          <label class="f">Model<select data-s="ai.model">${[['claude-opus-5-5', 'Claude Opus 5.5 (most accurate)'], ['claude-sonnet-5-5', 'Claude Sonnet 5.5 (faster, cheaper)'], ['claude-haiku-5-5', 'Claude Haiku 5.5 (fastest, cheapest)']].map(([m, l]) => opt(m, l, st.ai.model)).join('')}</select></label></div>
+          <label class="engine"><input type="radio" name="engine" data-s="ai.engine" value="local" ${st.ai.engine !== 'cloud' ? 'checked' : ''}>
+            <span><b>On-device AI</b> <span class="badge conf-high">Free</span><br><span class="small muted">Runs in this browser. Photos never leave the phone, no API key, no cost per photo, works offline after a one-time download (about 10 MB model + 14–27 MB runtime). Fills in job type, species, dead or fallen trees, stumps, power lines, house nearby, fence, rough height, snow surface, ice and lot size.</span></span></label>
+          <label class="engine"><input type="radio" name="engine" data-s="ai.engine" value="cloud" ${st.ai.engine === 'cloud' ? 'checked' : ''}>
+            <span><b>Claude cloud AI</b> <span class="badge">Optional</span><br><span class="small muted">More detailed: reads your notes, estimates trunk size, writes captions and summaries. Needs your Anthropic API key, sends photos to Anthropic, a few cents per analysis.</span></span></label>
+          <div id="localbox" class="${st.ai.engine === 'cloud' ? 'hidden' : ''}" style="margin-top:.6rem">
+            <div class="small" id="aistat">${esc(aiStatusText())}</div>
+            <div class="row" style="margin-top:.5rem">
+              <label class="f" style="width:auto">Processor<select data-s="ai.processor">${opt('auto', 'Auto (GPU when available)', st.ai.processor)}${opt('cpu', 'CPU only', st.ai.processor)}</select></label>
+              <button class="btn" id="aidl">⬇ Download AI now</button><button class="btn sm danger" id="aiclear">Remove downloaded AI</button>
+            </div>
+            <div class="tiny muted" style="margin-top:.4rem">Model: TinyCLIP ViT-8M/16 (Microsoft, MIT license), 8-bit, running on ONNX Runtime Web. Uses WebGPU when the device has it, otherwise WebAssembly.</div>
+          </div>
+          <div id="cloudbox" class="${st.ai.engine === 'cloud' ? '' : 'hidden'}" style="margin-top:.6rem">
+            <div class="grid">${f('Anthropic API key', 'ai.apiKey', 'password', 'sk-ant-…')}
+            <label class="f">Model<select data-s="ai.model">${[['claude-opus-5-5', 'Claude Opus 5.5 (most accurate)'], ['claude-sonnet-5-5', 'Claude Sonnet 5.5 (faster, cheaper)'], ['claude-haiku-5-5', 'Claude Haiku 5.5 (fastest, cheapest)']].map(([m, l]) => opt(m, l, st.ai.model)).join('')}</select></label></div>
+            <div class="row" style="margin-top:.6rem"><button class="btn" id="testkey">Test key</button><a class="small" href="https://platform.claude.com/settings/keys" target="_blank" rel="noopener">Get an API key →</a></div>
+          </div>
           <div class="chips" style="margin-top:.6rem">${tog('Analyze photos automatically', 'ai.auto')}</div>
-          <div class="row" style="margin-top:.6rem"><button class="btn" id="testkey">Test key</button><a class="small" href="https://platform.claude.com/settings/keys" target="_blank" rel="noopener">Get an API key →</a></div>
         </div>
         <div class="card"><h2>📍 Location</h2>
           <p class="muted small">Fill in the job address from where you're standing when you snap a job, and work out drive distance from your shop. Addresses are looked up with OpenStreetMap, the forecast comes from Open-Meteo.</p>
@@ -1636,13 +1698,32 @@ function viewSettings() {
     if (!k) return;
     let v = ev.target.type === 'checkbox' ? ev.target.checked : ev.target.value;
     if (ev.target.type === 'number') v = +v;
+    if (ev.target.type === 'radio' && !ev.target.checked) return;
     if (k === 'ai.apiKey') v = v.trim();
     setPath(st, k, v);
     await saveSettings();
+    if (k === 'ai.engine') {
+      $('#localbox')?.classList.toggle('hidden', v === 'cloud');
+      $('#cloudbox')?.classList.toggle('hidden', v !== 'cloud');
+    }
+    if (k === 'ai.processor') localAI.setProcessor(v);
+    const stEl = $('#aistat');
+    if (stEl) stEl.textContent = aiStatusText();
   };
   app.oninput = onS;
   app.onchange = onS;
   leaving = async () => { app.oninput = null; app.onchange = null; };
+  $('#aidl').onclick = async () => {
+    if (!localAI.support.ok) { toast(localAI.support.reason, 5000); return; }
+    await localAI.load().then(() => toast('✓ AI ready. Photo analysis now works offline.')).catch((err) => toast(err.message, 5000));
+  };
+  $('#aiclear').onclick = async () => {
+    if (!confirm('Remove the downloaded AI from this device? It downloads again the next time you analyze a photo.')) return;
+    await localAI.clear().catch(() => {});
+    const stEl = $('#aistat');
+    if (stEl) stEl.textContent = aiStatusText();
+    toast('Downloaded AI removed');
+  };
   $('#testkey').onclick = async (ev) => {
     const btn = ev.currentTarget;
     if (!st.ai.apiKey) { toast('Paste your API key first'); return; }
@@ -1745,6 +1826,13 @@ async function boot() {
     document.body.insertBefore(bar, app);
   }
   if ('serviceWorker' in navigator && location.protocol !== 'file:') navigator.serviceWorker.register('sw.js').catch(() => {});
+  localAI.setProcessor(S.settings.ai.processor);
+  // First visit: fetch the on-device AI in the background so it is ready (and offline) before the
+  // first photo. Skipped on data-saver connections; it then downloads on first use instead.
+  const conn = navigator.connection;
+  if (isLocal() && localAI.support.ok && S.settings.ai.auto && !conn?.saveData && !/2g/.test(conn?.effectiveType || '')) {
+    setTimeout(async () => { if (!(await localAI.isCached())) localAI.prefetch(); else renderAiChip(); }, 2500);
+  }
 }
 
 boot().catch((err) => {

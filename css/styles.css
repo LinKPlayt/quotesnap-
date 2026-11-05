@@ -324,3 +324,8 @@ figure.photo { margin: 0; }
   .badge.conf-medium { background: #3a2c0c; color: #f0c060; }
   .badge.conf-low { background: #3d1614; color: #ff9b92; }
 }
+
+/* ---------- on-device AI ---------- */
+label.engine { display: flex; gap: .6rem; align-items: flex-start; padding: .6rem .7rem; border: 1.5px solid var(--border); border-radius: 10px; margin-bottom: .5rem; cursor: pointer; }
+label.engine:has(input:checked) { border-color: var(--primary); background: var(--primary-soft); }
+label.engine input[type=radio] { width: 18px; height: 18px; padding: 0; margin: .15rem 0 0; flex: none; accent-color: var(--primary); }

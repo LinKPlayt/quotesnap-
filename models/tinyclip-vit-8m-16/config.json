@@ -1,0 +1,26 @@
+{
+  "id": "tinyclip-vit-8m-16",
+  "name": "TinyCLIP ViT-8M/16 (image encoder, 8-bit weights)",
+  "source": "https://huggingface.co/wkcn/TinyCLIP-ViT-8M-16-Text-3M-YFCC15M",
+  "revision": "a2a8c6eaa2549ad66eb7c31b85022bf58273a26c",
+  "license": "MIT (Copyright (c) Microsoft Corporation)",
+  "file": "vision_q8.onnx",
+  "bytes": 10280950,
+  "input": "pixel_values",
+  "output": "image_embeds",
+  "size": 224,
+  "mean": [
+    0.48145466,
+    0.4578275,
+    0.40821073
+  ],
+  "std": [
+    0.26862954,
+    0.26130258,
+    0.27577711
+  ],
+  "sha256": "c292c3c10da7f19afc82b88724c374e4875a06a25158e67f6dcf16c3602aa54c",
+  "labels": "labels.json",
+  "labelsSha256": "e28c9ff380c55a1575ee0f3afb71058f5437a461c71ebec011f57c82a0d64896",
+  "embedDim": 512
+}

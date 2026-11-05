@@ -164,7 +164,7 @@ export function aiToParsed(a) {
   return {
     replace: true,
     division: a.division,
-    flags: { emergency: !!a.emergency },
+    flags: typeof a.emergency === 'boolean' ? { emergency: a.emergency } : {},
     tree: isTree ? { ...a.tree, trees: trees.length ? trees : undefined } : {},
     snow: isTree ? {} : snow,
     customer: a.customer || {},
