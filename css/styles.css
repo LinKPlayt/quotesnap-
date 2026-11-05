@@ -329,3 +329,20 @@ figure.photo { margin: 0; }
 label.engine { display: flex; gap: .6rem; align-items: flex-start; padding: .6rem .7rem; border: 1.5px solid var(--border); border-radius: 10px; margin-bottom: .5rem; cursor: pointer; }
 label.engine:has(input:checked) { border-color: var(--primary); background: var(--primary-soft); }
 label.engine input[type=radio] { width: 18px; height: 18px; padding: 0; margin: .15rem 0 0; flex: none; accent-color: var(--primary); }
+
+/* ---------- resources, rates, breakdown ---------- */
+.res-item { border: 1px solid var(--border); border-radius: 10px; padding: .7rem .8rem; margin-bottom: .6rem; background: var(--surface); }
+.res-item.inactive { opacity: .6; }
+details.res-item > summary { cursor: pointer; list-style: none; }
+details.res-item > summary::-webkit-details-marker { display: none; }
+details.res-item > summary::before { content: '▸ '; color: var(--muted); }
+details.res-item[open] > summary::before { content: '▾ '; }
+.conf { display: inline-block; width: 46px; height: 6px; border-radius: 3px; background: var(--surface-2); vertical-align: middle; overflow: hidden; }
+.conf i { display: block; height: 100%; background: #8b6bd1; }
+.bad { color: var(--danger); font-weight: 700; }
+.setup-links .btn { flex-direction: column; line-height: 1.25; padding: .7rem; }
+@media (max-width: 1100px) { .nav a { padding: .4rem .45rem; font-size: .92rem; } }
+@media (max-width: 600px) {
+  .card table.t { display: block; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  .card table.t td, .card table.t th { white-space: normal; }
+}

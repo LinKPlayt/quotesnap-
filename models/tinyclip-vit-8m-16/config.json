@@ -21,6 +21,6 @@
   ],
   "sha256": "c292c3c10da7f19afc82b88724c374e4875a06a25158e67f6dcf16c3602aa54c",
   "labels": "labels.json",
-  "labelsSha256": "e28c9ff380c55a1575ee0f3afb71058f5437a461c71ebec011f57c82a0d64896",
+  "labelsSha256": "ccc287e94a5236a409a1b44ef0a6fa96919e849e5f255f0ceb3bb6de80b574f2",
   "embedDim": 512
 }

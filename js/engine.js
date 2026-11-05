@@ -1,55 +1,14 @@
 // QuoteSnap estimating engine. Pure functions, no DOM: safe to unit test with node.
-// Turns a job description + a few fields into labor, equipment, materials, price,
-// profit, scope of work and good/better/best customer options.
+// Parses job descriptions, builds the scope of work and good/better/best customer options.
+// The resource-aware time and cost planning lives in js/planner.js.
 
 import { DEFAULT_PRICEBOOK } from './pricebook.js';
+import { DEFAULT_MULTIPLIERS } from './company.js';
+import { SPECIES, HAZARDS, DEBRIS, speciesFactor, estimateDbh, recommendMethod, calcTree, calcSnow } from './planner.js';
 
-// ---------- reference data ----------
-
-export const SPECIES = {
-  oak: 1.2, 'white oak': 1.25, 'red oak': 1.2, hickory: 1.25, walnut: 1.2, locust: 1.3, 'honey locust': 1.3,
-  beech: 1.2, maple: 1.1, 'sugar maple': 1.15, 'silver maple': 1.05, ash: 1.1, elm: 1.15, sycamore: 1.15,
-  cherry: 1.05, birch: 1.0, 'sweet gum': 1.05, gum: 1.05, 'tulip poplar': 1.0, poplar: 0.95, cottonwood: 1.0,
-  willow: 1.05, linden: 1.0, basswood: 0.95, mulberry: 1.15, 'black locust': 1.3, catalpa: 1.0, pecan: 1.2,
-  pine: 0.95, 'white pine': 0.95, spruce: 0.9, fir: 0.9, hemlock: 0.95, cedar: 0.95, arborvitae: 0.8,
-  cypress: 1.0, palm: 0.8, magnolia: 1.0, dogwood: 0.9, 'crab apple': 0.95, apple: 0.95, 'bradford pear': 1.0, pear: 1.0,
-};
+export { SPECIES, speciesFactor, estimateDbh, recommendMethod, calcTree, calcSnow };
 
 const NUMBER_WORDS = { one: 1, a: 1, an: 1, single: 1, two: 2, pair: 2, couple: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10 };
-
-const ACCESS = {
-  open:     { f: 1.0,  label: 'Open access – equipment can drive to the tree' },
-  driveway: { f: 1.05, label: 'Driveway / street access' },
-  backyard: { f: 1.3,  label: 'Backyard access through gate' },
-  tight:    { f: 1.6,  label: 'Tight / no equipment access – all hand-carry' },
-};
-
-const HAZARDS = {
-  powerLines:    { f: 0.35, label: 'Near power lines', safety: 'Power lines present: maintain minimum approach distance; utility drop/coordination may be required. Only qualified line-clearance workers within 10 ft.' },
-  overHouse:     { f: 0.30, label: 'Over house / roof', safety: 'Canopy over structure: all limbs to be roped and lowered (rigging). No free-falling over roof.' },
-  nearStructure: { f: 0.20, label: 'Near structure', safety: 'Structure in drop zone: sectional removal with controlled rigging.' },
-  dead:          { f: 0.15, label: 'Dead / decayed', safety: 'Dead or decayed wood: inspect before climbing; aerial device or crane preferred over climbing.' },
-  leaning:       { f: 0.15, label: 'Leaning / storm damaged', safety: 'Leaning or storm-loaded tree: assess tension/compression; establish exclusion zone.' },
-  fenceGarden:   { f: 0.10, label: 'Fence / landscaping in drop zone', safety: 'Protect fence, beds and lawn with ground mats and plywood.' },
-};
-
-const METHOD = {
-  crane: { f: 0.6,  label: 'Crane-assisted removal' },
-  bucket:{ f: 0.75, label: 'Bucket truck' },
-  lift:  { f: 0.85, label: 'Tracked spider lift' },
-  climb: { f: 1.0,  label: 'Climbing & rigging' },
-};
-
-const DEBRIS = {
-  haul:          { f: 0.30, label: 'Chip brush and haul away all wood and debris' },
-  chipLeaveLogs: { f: 0.18, label: 'Chip and haul brush; cut wood left on site' },
-  leave:         { f: 0.06, label: 'Leave all wood and brush on site' },
-};
-
-const TRIM = { light: 0.35, standard: 0.5, heavy: 0.7 };
-
-const SNOW_PROD = { plow: 40000, skid: 30000, blower: 4000, shovel: 800 }; // sq ft per hour at 2"
-const OBSTACLES = { low: 1.0, med: 1.2, high: 1.45 };
 
 // ---------- helpers ----------
 
@@ -57,20 +16,6 @@ const r2 = (n) => Math.round(n * 100) / 100;
 const roundUp = (n, step) => (step > 0 ? Math.ceil(n / step) * step : Math.round(n));
 export const money = (n) => (n < 0 ? '-' : '') + '$' + Math.abs(n).toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 });
 const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1);
-
-export function speciesFactor(species) {
-  if (!species) return 1.05;
-  const s = species.toLowerCase().trim();
-  if (SPECIES[s]) return SPECIES[s];
-  const hit = Object.keys(SPECIES).sort((a, b) => b.length - a.length).find((k) => s.includes(k));
-  return hit ? SPECIES[hit] : 1.05;
-}
-
-// Typical trunk diameter (inches at chest height) when the contractor didn't measure it.
-export function estimateDbh(heightFt, species) {
-  const f = speciesFactor(species);
-  return Math.max(4, Math.round(heightFt * (f >= 1.1 ? 0.5 : f <= 0.9 ? 0.35 : 0.42)));
-}
 
 // ---------- natural language parsing ----------
 
@@ -109,7 +54,7 @@ export function parseDescription(text = '') {
   const t = ' ' + clean.toLowerCase().replace(/[’']/g, "'") + ' ';
   const out = { division: null, tree: {}, snow: {}, flags: {}, customer };
 
-  const snowWords = /\b(snow|plow|plowing|shovel|shoveling|salt|salting|de-?ice|ice melt|blizzard|roof rake)\b/;
+  const snowWords = /\b(snow|plow|plowing|shovel|shoveling|salt|salting|de-?ice|ice melt|blizzard|roof rake|parking lot)\b/;
   const treeWords = /\b(tree|oak|maple|pine|stump|limb|branch|trim|prune|removal|remove|arborist|canopy|spruce|ash|elm|cable)\b/;
   out.division = snowWords.test(t) && !treeWords.test(t) ? 'snow' : treeWords.test(t) ? 'tree' : snowWords.test(t) ? 'snow' : null;
 
@@ -247,6 +192,10 @@ export function applyParsed(job, parsed, locks = {}) {
   if (division === 'snow') {
     for (const [k, v] of Object.entries(parsed.snow || {})) if (v !== undefined && v !== null && free(`job.snow.${k}`)) j.snow[k] = v;
   }
+  for (const [k, v] of Object.entries(parsed.conditions || {})) {
+    if (!free(`job.conditions.${k}`)) continue;
+    if (rep ? typeof v === 'boolean' : v) (j.conditions ||= {})[k] = !!v;
+  }
   return j;
 }
 
@@ -297,8 +246,10 @@ export function describeChanges(before, after) {
     }
     for (const k of ['access', 'method', 'debris', 'trimLevel', 'stumps', 'restore', 'firewood']) add(`job.tree.${k}`, FIELD_LABELS[`job.tree.${k}`], before.tree[k], after.tree[k]);
     for (const k of Object.keys(HAZARDS)) add(`job.tree.hazards.${k}`, HAZARDS[k].label, !!before.tree.hazards[k], !!after.tree.hazards[k]);
+    for (const [k, c] of Object.entries(DEFAULT_MULTIPLIERS.conditions)) if (!HAZARDS[k] && c.division !== 'snow') add(`job.conditions.${k}`, c.label, !!before.conditions?.[k], !!after.conditions?.[k]);
   } else {
     for (const k of Object.keys(after.snow)) if (FIELD_LABELS[`job.snow.${k}`]) add(`job.snow.${k}`, FIELD_LABELS[`job.snow.${k}`], before.snow[k], after.snow[k]);
+    for (const [k, c] of Object.entries(DEFAULT_MULTIPLIERS.conditions)) if (c.division !== 'tree') add(`job.conditions.${k}`, c.label, !!before.conditions?.[k], !!after.conditions?.[k]);
   }
   return out;
 }
@@ -310,8 +261,14 @@ export function newJob(division = 'tree') {
     division,
     description: '',
     emergency: false,
+    storm: false,
+    weekend: false,
+    holiday: false,
     permit: false,
     miles: 0,
+    property: 'residential', // tree jobs (snow jobs use snow.property)
+    difficulty: 'normal',
+    conditions: {},
     tree: {
       trees: [newTree()],
       access: 'driveway',
@@ -335,268 +292,8 @@ export function newJob(division = 'tree') {
       priority: false,
       contract: 'perPush',
       events: 0,
+      haul: false,
     },
-  };
-}
-
-// ---------- equipment recommendation ----------
-
-export function recommendMethod(tree) {
-  const reasons = [];
-  if (tree.method && tree.method !== 'auto') {
-    reasons.push(`${METHOD[tree.method].label} selected by estimator.`);
-    return { method: tree.method, reasons };
-  }
-  const tallest = Math.max(0, ...tree.trees.filter((t) => t.work !== 'stump').map((t) => +t.heightFt || 0));
-  const hz = tree.hazards || {};
-  if (tallest === 0) return { method: 'climb', reasons };
-  if (tallest > 75 || (hz.overHouse && hz.dead) || (tree.access === 'tight' && hz.overHouse && tallest > 50)) {
-    reasons.push(tallest > 75 ? `Tree over 75 ft: crane is fastest and safest.` : 'Dead tree over a structure: crane avoids climbing compromised wood.');
-    return { method: 'crane', reasons };
-  }
-  if (tree.access === 'tight') {
-    reasons.push('No equipment access: climbing and rigging, debris hand-carried.');
-    return { method: 'climb', reasons };
-  }
-  if (tree.access === 'backyard') {
-    reasons.push('Backyard gate access: tracked spider lift fits through a 36" gate and protects the lawn.');
-    return { method: tallest > 25 ? 'lift' : 'climb', reasons };
-  }
-  if (tallest >= 25) {
-    reasons.push('Truck can reach the tree: bucket truck is faster and safer than climbing.');
-    return { method: 'bucket', reasons };
-  }
-  reasons.push('Small tree: ground work and climbing only.');
-  return { method: 'climb', reasons };
-}
-
-// ---------- pricing core ----------
-
-function finish(division, pb, parts, opts = {}) {
-  const { laborCost, equipment, materials, travel, emergency } = parts;
-  const equipmentCost = equipment.reduce((s, e) => s + e.cost, 0);
-  const materialCost = materials.reduce((s, m) => s + m.cost, 0);
-  const directCost = laborCost + equipmentCost + materialCost + travel;
-  const overhead = directCost * (pb.overheadPct / 100);
-  const fullCost = directCost + overhead;
-  const margin = (opts.marginPct ?? pb.targetMarginPct) / 100;
-  let price = fullCost / Math.max(0.05, 1 - margin);
-  if (opts.priorityPct) price *= 1 + opts.priorityPct / 100;
-  const min = division === 'tree' ? pb.minJobTree : pb.minJobSnow;
-  price = Math.max(min, roundUp(price, division === 'snow' ? 5 : pb.roundTo));
-  const profit = price - fullCost;
-  return {
-    laborCost: r2(laborCost),
-    equipmentCost: r2(equipmentCost),
-    materialCost: r2(materialCost),
-    travel: r2(travel),
-    directCost: r2(directCost),
-    overhead: r2(overhead),
-    fullCost: r2(fullCost),
-    price,
-    profit: r2(profit),
-    marginPct: r2((profit / price) * 100),
-    emergency: !!emergency,
-  };
-}
-
-function equipLine(pb, key, hours) {
-  const e = pb.equipment[key];
-  const h = Math.max(e.min || 0, hours);
-  return { key, label: e.label, hours: r2(h), rate: e.rate, cost: r2(h * e.rate) };
-}
-
-function travelCost(pb, miles) {
-  return Math.max(0, (+miles || 0) - pb.travel.freeMiles) * pb.travel.perMile;
-}
-
-// Tree job estimate for one configuration.
-export function calcTree(job, pb = DEFAULT_PRICEBOOK, opts = {}) {
-  const tree = { ...job.tree, ...(opts.override || {}) };
-  const hz = tree.hazards || {};
-  const { method, reasons } = recommendMethod(tree);
-  const accessF = ACCESS[tree.access]?.f ?? 1;
-  const hazardF = 1 + Object.keys(HAZARDS).reduce((s, k) => s + (hz[k] && !(k === 'nearStructure' && hz.overHouse) ? HAZARDS[k].f : 0), 0);
-  const methodF = METHOD[method].f;
-
-  let workHours = 0;   // crew hours aloft/ground cutting
-  let grindHours = 0;
-  let volumeYd = 0;
-  let cableKits = 0;
-  let stumpCount = 0;
-  const treeLines = [];
-
-  for (const t of tree.trees) {
-    const qty = Math.max(1, +t.qty || 1);
-    const h = Math.max(0, +t.heightFt || 0);
-    const d = +t.dbhIn > 0 ? +t.dbhIn : estimateDbh(h || 20, t.species);
-    const sf = speciesFactor(t.species);
-    const base = 0.25 + h / 22 + d / 16; // crew hours for a clean, open removal
-    let hrs = 0;
-    if (t.work === 'remove') {
-      hrs = base * sf * accessF * hazardF * methodF;
-      volumeYd += (h * d) / 60;
-      if (tree.stumps) { grindHours += (0.3 + d * 0.035) * (tree.access === 'tight' ? 1.3 : 1); stumpCount++; }
-    } else if (t.work === 'trim') {
-      hrs = base * (TRIM[tree.trimLevel] ?? 0.5) * sf * accessF * hazardF * Math.max(0.8, methodF);
-      volumeYd += ((h * d) / 60) * (TRIM[tree.trimLevel] ?? 0.5) * 0.5 * qty;
-    } else if (t.work === 'cable') {
-      hrs = (1.5 + h / 40) * hazardF;
-      cableKits += 1;
-    } else if (t.work === 'stump') {
-      grindHours += (0.3 + d * 0.035) * (tree.access === 'tight' ? 1.3 : 1);
-      stumpCount++;
-    }
-    treeLines.push({ ...t, dbhIn: d, hours: r2(hrs * qty), qty });
-    workHours += hrs * qty;
-    if (t.work === 'remove' || t.work === 'stump') {
-      // stump count scales with quantity
-      if (qty > 1 && (tree.stumps || t.work === 'stump')) {
-        grindHours += (0.3 + d * 0.035) * (qty - 1);
-        stumpCount += qty - 1;
-      }
-    }
-    volumeYd += t.work === 'remove' ? ((h * d) / 60) * (qty - 1) : 0;
-  }
-
-  const debrisF = DEBRIS[tree.debris]?.f ?? 0.3;
-  let cleanupHours = workHours * debrisF;
-  if (tree.firewood) cleanupHours += workHours * 0.15;
-  if (tree.access === 'tight') cleanupHours *= 1.4;
-  const siteHours = workHours + cleanupHours + (workHours > 0 ? 0.5 : 0); // setup/teardown
-
-  let crew = pb.crew.tree;
-  if (method === 'crane' || hz.powerLines || hz.overHouse) crew += 1;
-  if (workHours === 0) crew = 1; // stump-only job
-
-  const laborMult = job.emergency ? pb.labor.emergencyMult : 1;
-  const wage = pb.labor.wage * (1 + pb.labor.burdenPct / 100) * laborMult;
-  const personHours = siteHours * crew + grindHours; // one operator on the grinder
-  const laborCost = personHours * wage;
-
-  const equipment = [];
-  if (workHours > 0) {
-    equipment.push(equipLine(pb, method, method === 'crane' ? workHours * 0.7 : workHours));
-    if (method !== 'climb') equipment.push(equipLine(pb, 'climb', workHours * 0.3));
-    if (tree.debris !== 'leave') equipment.push(equipLine(pb, 'chipper', (workHours + cleanupHours) * 0.5));
-    if (tree.debris === 'haul' || tree.access === 'backyard') equipment.push(equipLine(pb, 'loader', cleanupHours));
-    if (tree.debris !== 'leave') equipment.push(equipLine(pb, 'dump', siteHours));
-  }
-  if (grindHours > 0) equipment.push(equipLine(pb, 'grinder', grindHours));
-
-  const equipHours = equipment.reduce((s, e) => s + (pb.equipment[e.key].rate > 20 ? e.hours : 0), 0);
-  const materials = [];
-  materials.push({ label: 'Fuel, bar oil & chain wear', qty: r2(equipHours), unit: 'equip hr', cost: r2(equipHours * pb.materials.fuelPerEquipHour) });
-  const haulYd = tree.debris === 'haul' ? volumeYd : tree.debris === 'chipLeaveLogs' ? volumeYd * 0.4 : 0;
-  const loads = haulYd > 0 ? Math.ceil(haulYd / pb.materials.loadYards) : 0;
-  if (loads) materials.push({ label: 'Dump / green-waste fees', qty: loads, unit: 'load', cost: loads * pb.materials.dumpFeePerLoad });
-  if (cableKits) materials.push({ label: 'Cabling & bracing hardware', qty: cableKits, unit: 'kit', cost: cableKits * pb.materials.cablingKit });
-  if (tree.restore && stumpCount) materials.push({ label: 'Topsoil, seed & straw', qty: stumpCount, unit: 'stump', cost: stumpCount * pb.materials.restoreKit });
-  if (job.permit) materials.push({ label: 'Permit / municipal fee', qty: 1, unit: 'ea', cost: pb.materials.permitFee });
-
-  const fin = finish('tree', pb, { laborCost, equipment, materials, travel: travelCost(pb, job.miles), emergency: job.emergency }, opts);
-
-  const safety = Object.keys(HAZARDS).filter((k) => hz[k]).map((k) => HAZARDS[k].safety);
-  if (job.emergency) safety.unshift('Emergency/storm response: site hazard assessment before any cuts.');
-
-  return {
-    division: 'tree',
-    method,
-    methodLabel: METHOD[method].label,
-    reasons,
-    crew,
-    siteHours: r2(siteHours),
-    grindHours: r2(grindHours),
-    personHours: r2(personHours),
-    days: Math.max(1, Math.ceil((siteHours + grindHours) / 8)),
-    labor: { crew, siteHours: r2(siteHours), personHours: r2(personHours), wage: r2(wage), cost: r2(laborCost) },
-    equipment,
-    materials,
-    volumeYd: r2(volumeYd),
-    loads,
-    stumpCount,
-    treeLines,
-    safety,
-    ...fin,
-    profitPerCrewHour: personHours ? r2(fin.profit / (siteHours + grindHours || 1)) : 0,
-    config: tree,
-  };
-}
-
-// Snow job estimate (per visit / per event).
-export function calcSnow(job, pb = DEFAULT_PRICEBOOK, opts = {}) {
-  const s = { ...job.snow, ...(opts.override || {}) };
-  const area = Math.max(0, +s.areaSqft || 0);
-  const walk = Math.max(0, +s.walkLf || 0);
-  const roof = Math.max(0, +s.roofSqft || 0);
-  const depth = Math.max(1, +s.depthIn || 2);
-  const reasons = [];
-
-  let method = s.method;
-  if (!method || method === 'auto') {
-    if (area >= 15000) { method = 'skid'; reasons.push('Large lot: skid steer with pusher box stacks snow fastest.'); }
-    else if (area >= 1500) { method = 'plow'; reasons.push('Driveway/small lot: plow truck.'); }
-    else if (area > 0) { method = 'blower'; reasons.push('Small area: walk-behind snow blower.'); }
-    else method = 'shovel';
-  } else reasons.push(`${pb.equipment[method]?.label || method} selected by estimator.`);
-
-  const depthF = 1 + Math.max(0, depth - 2) / 6;
-  const obsF = OBSTACLES[s.obstacles] ?? 1;
-  const areaHours = area > 0 && s.plowOff !== true ? (area / SNOW_PROD[method]) * depthF * obsF : 0;
-  const walkHours = walk > 0 ? ((walk * 4) / (s.property === 'commercial' ? 1500 : 1200)) * depthF : 0;
-  const saltArea = s.salt ? area + walk * 4 : 0;
-  const saltHours = s.salt ? 0.1 + saltArea / 40000 : 0;
-  const roofHours = roof > 0 ? (roof / 350) * depthF : 0;
-  const setup = 0.15;
-  const siteHours = areaHours + walkHours + saltHours + roofHours + setup;
-
-  let crew = pb.crew.snow;
-  if (walk > 0 && s.property === 'commercial') crew += 1;
-  if (roof > 0) crew = Math.max(crew, 2);
-
-  const laborMult = job.emergency ? pb.labor.emergencyMult : 1;
-  const wage = pb.labor.wage * (1 + pb.labor.burdenPct / 100) * laborMult;
-  const personHours = siteHours * crew;
-  const laborCost = personHours * wage;
-
-  const equipment = [];
-  if (areaHours > 0) equipment.push(equipLine(pb, method, areaHours + setup));
-  if (walkHours > 0) equipment.push(equipLine(pb, 'blower', walkHours));
-  if (s.salt) equipment.push(equipLine(pb, 'spreader', saltHours));
-  if (roofHours > 0) equipment.push(equipLine(pb, 'shovel', roofHours));
-
-  const saltLbs = s.salt ? Math.ceil((saltArea / 1000) * pb.materials.saltLbPer1000) : 0;
-  const equipHours = equipment.reduce((sum, e) => sum + e.hours, 0);
-  const materials = [{ label: 'Fuel', qty: r2(equipHours), unit: 'equip hr', cost: r2(equipHours * pb.materials.fuelPerEquipHour * 0.6) }];
-  if (saltLbs) materials.push({ label: 'Rock salt / ice melt', qty: saltLbs, unit: 'lb', cost: r2(saltLbs * pb.materials.saltPerLb) });
-
-  const fin = finish('snow', pb, { laborCost, equipment, materials, travel: travelCost(pb, job.miles) / 2, emergency: job.emergency }, {
-    ...opts,
-    priorityPct: s.priority ? pb.snow.priorityPct : 0,
-  });
-
-  const safety = [];
-  if (roof > 0) safety.push('Roof work: fall protection required; keep drop zone below roped off.');
-  if (s.salt) safety.push('Keep salt off landscaping and fresh concrete (<1 yr old).');
-  if (s.property === 'commercial') safety.push('Commercial site: log every visit with time, depth and salt applied (slip-and-fall protection).');
-
-  return {
-    division: 'snow',
-    method,
-    methodLabel: pb.equipment[method]?.label || method,
-    reasons,
-    crew,
-    siteHours: r2(siteHours),
-    personHours: r2(personHours),
-    days: 1,
-    labor: { crew, siteHours: r2(siteHours), personHours: r2(personHours), wage: r2(wage), cost: r2(laborCost) },
-    equipment,
-    materials,
-    saltLbs,
-    safety,
-    ...fin,
-    profitPerCrewHour: siteHours ? r2(fin.profit / siteHours) : 0,
-    config: s,
   };
 }
 
@@ -641,8 +338,8 @@ export function scopeOfWork(job, est) {
 
 // ---------- customer options (good / better / best) ----------
 
-export function buildOptions(job, pb = DEFAULT_PRICEBOOK, marginPct) {
-  const opts = { marginPct };
+export function buildOptions(job, pb = DEFAULT_PRICEBOOK, marginPct, company) {
+  const opts = { marginPct, company };
   if (job.division === 'tree') {
     const hasRemoval = job.tree.trees.some((t) => t.work === 'remove');
     if (!hasRemoval) {
@@ -689,13 +386,13 @@ export function buildOptions(job, pb = DEFAULT_PRICEBOOK, marginPct) {
 }
 
 // Price per depth tier for snow quotes ("2–4 in: $X").
-export function snowDepthTiers(job, pb = DEFAULT_PRICEBOOK, marginPct) {
+export function snowDepthTiers(job, pb = DEFAULT_PRICEBOOK, marginPct, company) {
   return [
     { label: '2–4"', depth: 3 },
     { label: '4–8"', depth: 6 },
     { label: '8–12"', depth: 10 },
     { label: '12"+', depth: 15 },
-  ].map((t) => ({ ...t, price: calcSnow(job, pb, { marginPct, override: { depthIn: t.depth } }).price }));
+  ].map((t) => ({ ...t, price: calcSnow(job, pb, { marginPct, company, override: { depthIn: t.depth } }).price }));
 }
 
 // Totals for a chosen option with tax, discount and custom adjustments.

@@ -168,5 +168,6 @@ export function aiToParsed(a) {
     tree: isTree ? { ...a.tree, trees: trees.length ? trees : undefined } : {},
     snow: isTree ? {} : snow,
     customer: a.customer || {},
+    conditions: a.conditions || {},
   };
 }

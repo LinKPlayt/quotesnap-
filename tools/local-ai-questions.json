@@ -1,92 +1,395 @@
 {
   "_comment": "Questions the on-device AI asks about each photo. Each class is described by a few text prompts; tools/build_local_ai.py turns them into text embeddings (models/<model>/labels.json) so the browser only has to run the image half of the model. Edit prompts here and re-run the tool.",
   "templates": {
-    "species": ["a photo of a {}.", "a photo of a {} in a yard.", "a {} growing in a park.", "a close-up photo of the leaves of a {}.", "a photo of the trunk and bark of a {}.", "a large {}."]
+    "species": [
+      "a photo of a {}.",
+      "a photo of a {} in a yard.",
+      "a {} growing in a park.",
+      "a close-up photo of the leaves of a {}.",
+      "a photo of the trunk and bark of a {}.",
+      "a large {}."
+    ]
   },
   "questions": [
-    { "id": "scene", "classes": {
-      "tree":  ["a photo of a tree", "a photo of trees in a yard", "a photo of a large tree next to a house", "a photo of a fallen tree", "a photo of a tree stump", "a photo of tree branches", "a photo of overgrown hedges"],
-      "snow":  ["a photo of a snow covered driveway", "a photo of a snowy parking lot", "a photo of an icy sidewalk", "a photo of snow on a roof", "a photo of a snowy street", "a photo of a yard covered in snow"],
-      "other": ["a photo of a person's face", "a screenshot of a phone screen", "a photo of a document", "a photo of a room indoors", "a photo of food", "a photo of a car", "a photo of a building", "a photo of a flag"]
-    }},
-    { "id": "form", "classes": {
-      "standing": ["a photo of a standing tree", "a photo of a tall tree in a yard"],
-      "fallen":   ["a photo of a fallen tree lying on the ground", "a photo of a tree that fell on a house", "a photo of a tree uprooted by a storm"],
-      "stump":    ["a photo of a tree stump", "a photo of a cut tree stump in a lawn"],
-      "hedge":    ["a photo of overgrown hedges and shrubs", "a photo of a row of bushes"],
-      "closeup":  ["a close-up photo of tree bark", "a close-up photo of leaves on a branch"]
-    }},
-    { "id": "condition", "classes": {
-      "healthy": ["a photo of a healthy tree with green leaves", "a photo of a healthy evergreen tree", "a photo of a living tree"],
-      "dead":    ["a photo of a dead tree", "a photo of a dead tree with no bark", "a photo of a tree with many dead branches"],
-      "bare":    ["a photo of a leafless tree in winter", "a photo of a bare deciduous tree in late autumn"],
-      "storm":   ["a photo of a storm damaged tree with broken limbs", "a photo of a split tree trunk"]
-    }},
-    { "id": "species", "template": "species", "classes": {
-      "oak": "oak tree", "maple": "maple tree", "pine": "pine tree", "spruce": "spruce tree", "birch": "white birch tree",
-      "willow": "weeping willow tree", "palm": "palm tree", "ash": "ash tree", "elm": "elm tree"
-    }},
-    { "id": "size", "classes": {
-      "15": ["a photo of a small tree shorter than a house", "a photo of a young sapling"],
-      "30": ["a photo of a medium sized tree about as tall as a house"],
-      "50": ["a photo of a tall tree much taller than the house"],
-      "75": ["a photo of a giant towering tree far taller than the houses around it"]
-    }},
-    { "id": "proximity", "classes": {
-      "overHouse":     ["a photo of a large tree hanging over the roof of a house", "a photo of tree branches above a roof"],
-      "nearStructure": ["a photo of a tree right next to a house", "a photo of a tree next to a garage or shed"],
-      "clear":         ["a photo of a tree in an open yard away from buildings", "a photo of a tree in a field"],
-      "forest":        ["a photo of trees in a forest"]
-    }},
-    { "id": "powerLines", "classes": {
-      "yes": ["a photo of a tree with power lines running through its branches", "a photo of overhead power lines and a utility pole next to a tree"],
-      "no":  ["a photo of a tree against a clear sky with no wires", "a photo of a tree with no power lines"]
-    }},
-    { "id": "leaning", "classes": {
-      "yes": ["a photo of a tree leaning heavily to one side"],
-      "no":  ["a photo of a straight upright tree"]
-    }},
-    { "id": "fence", "classes": {
-      "yes": ["a photo of a backyard with a wooden fence", "a photo of a garden with flower beds and a patio"],
-      "no":  ["a photo of an open lawn with no fence"]
-    }},
-    { "id": "access", "classes": {
-      "backyard": ["a photo of a fenced backyard behind a house"],
-      "driveway": ["a photo of a tree next to a driveway", "a photo of a front yard next to the street"],
-      "open":     ["a photo of a tree in an open field", "a photo of a large open lawn"],
-      "tight":    ["a photo of a narrow space between two houses"]
-    }},
-    { "id": "surface", "classes": {
-      "driveway": ["a photo of a snow covered driveway at a house"],
-      "lot":      ["a photo of a snow covered parking lot"],
-      "sidewalk": ["a photo of a snowy sidewalk"],
-      "roof":     ["a photo of snow on a house roof"],
-      "street":   ["a photo of a snowy residential street"]
-    }},
-    { "id": "area", "classes": {
-      "500":   ["a photo of a short single car driveway"],
-      "1000":  ["a photo of a wide two car driveway"],
-      "2500":  ["a photo of a long driveway"],
-      "10000": ["a photo of a small parking lot"],
-      "40000": ["a photo of a large parking lot"]
-    }},
-    { "id": "depth", "classes": {
-      "1":  ["a photo of a light dusting of snow on the ground"],
-      "4":  ["a photo of a few inches of snow"],
-      "10": ["a photo of deep snow"],
-      "18": ["a photo of very deep snow drifts"]
-    }},
-    { "id": "ice", "classes": {
-      "yes": ["a photo of icy slippery pavement", "a photo of a sheet of ice on a sidewalk"],
-      "no":  ["a photo of fresh fluffy snow", "a photo of dry cleared pavement"]
-    }},
-    { "id": "cars", "classes": {
-      "many": ["a photo of a parking lot full of parked cars"],
-      "few":  ["a photo of an empty parking lot"]
-    }},
-    { "id": "walks", "classes": {
-      "yes": ["a photo of a sidewalk along the front of a property", "a photo of a front walkway leading to a door"],
-      "no":  ["a photo of a driveway with no sidewalk"]
-    }}
+    {
+      "id": "scene",
+      "classes": {
+        "tree": [
+          "a photo of a tree",
+          "a photo of trees in a yard",
+          "a photo of a large tree next to a house",
+          "a photo of a fallen tree",
+          "a photo of a tree stump",
+          "a photo of tree branches",
+          "a photo of overgrown hedges"
+        ],
+        "snow": [
+          "a photo of a snow covered driveway",
+          "a photo of a snowy parking lot",
+          "a photo of an icy sidewalk",
+          "a photo of snow on a roof",
+          "a photo of a snowy street",
+          "a photo of a yard covered in snow"
+        ],
+        "other": [
+          "a photo of a person's face",
+          "a screenshot of a phone screen",
+          "a photo of a document",
+          "a photo of a room indoors",
+          "a photo of food",
+          "a photo of a car",
+          "a photo of a building",
+          "a photo of a flag"
+        ]
+      }
+    },
+    {
+      "id": "form",
+      "classes": {
+        "standing": [
+          "a photo of a standing tree",
+          "a photo of a tall tree in a yard"
+        ],
+        "fallen": [
+          "a photo of a fallen tree lying on the ground",
+          "a photo of a tree that fell on a house",
+          "a photo of a tree uprooted by a storm"
+        ],
+        "stump": [
+          "a photo of a tree stump",
+          "a photo of a cut tree stump in a lawn"
+        ],
+        "hedge": [
+          "a photo of overgrown hedges and shrubs",
+          "a photo of a row of bushes"
+        ],
+        "closeup": [
+          "a close-up photo of tree bark",
+          "a close-up photo of leaves on a branch"
+        ]
+      }
+    },
+    {
+      "id": "condition",
+      "classes": {
+        "healthy": [
+          "a photo of a healthy tree with green leaves",
+          "a photo of a healthy evergreen tree",
+          "a photo of a living tree"
+        ],
+        "dead": [
+          "a photo of a dead tree",
+          "a photo of a dead tree with no bark",
+          "a photo of a tree with many dead branches"
+        ],
+        "bare": [
+          "a photo of a leafless tree in winter",
+          "a photo of a bare deciduous tree in late autumn"
+        ],
+        "storm": [
+          "a photo of a storm damaged tree with broken limbs",
+          "a photo of a split tree trunk"
+        ]
+      }
+    },
+    {
+      "id": "species",
+      "template": "species",
+      "classes": {
+        "oak": "oak tree",
+        "maple": "maple tree",
+        "pine": "pine tree",
+        "spruce": "spruce tree",
+        "birch": "white birch tree",
+        "willow": "weeping willow tree",
+        "palm": "palm tree",
+        "ash": "ash tree",
+        "elm": "elm tree"
+      }
+    },
+    {
+      "id": "size",
+      "classes": {
+        "15": [
+          "a photo of a small tree shorter than a house",
+          "a photo of a young sapling"
+        ],
+        "30": [
+          "a photo of a medium sized tree about as tall as a house"
+        ],
+        "50": [
+          "a photo of a tall tree much taller than the house"
+        ],
+        "75": [
+          "a photo of a giant towering tree far taller than the houses around it"
+        ]
+      }
+    },
+    {
+      "id": "proximity",
+      "classes": {
+        "overHouse": [
+          "a photo of a large tree hanging over the roof of a house",
+          "a photo of tree branches above a roof"
+        ],
+        "nearStructure": [
+          "a photo of a tree right next to a house",
+          "a photo of a tree next to a garage or shed"
+        ],
+        "clear": [
+          "a photo of a tree in an open yard away from buildings",
+          "a photo of a tree in a field"
+        ],
+        "forest": [
+          "a photo of trees in a forest"
+        ]
+      }
+    },
+    {
+      "id": "powerLines",
+      "classes": {
+        "yes": [
+          "a photo of a tree with power lines running through its branches",
+          "a photo of overhead power lines and a utility pole next to a tree"
+        ],
+        "no": [
+          "a photo of a tree against a clear sky with no wires",
+          "a photo of a tree with no power lines"
+        ]
+      }
+    },
+    {
+      "id": "leaning",
+      "classes": {
+        "yes": [
+          "a photo of a tree leaning heavily to one side"
+        ],
+        "no": [
+          "a photo of a straight upright tree"
+        ]
+      }
+    },
+    {
+      "id": "fence",
+      "classes": {
+        "yes": [
+          "a photo of a backyard with a wooden fence",
+          "a photo of a garden with flower beds and a patio"
+        ],
+        "no": [
+          "a photo of an open lawn with no fence"
+        ]
+      }
+    },
+    {
+      "id": "access",
+      "classes": {
+        "backyard": [
+          "a photo of a fenced backyard behind a house"
+        ],
+        "driveway": [
+          "a photo of a tree next to a driveway",
+          "a photo of a front yard next to the street"
+        ],
+        "open": [
+          "a photo of a tree in an open field",
+          "a photo of a large open lawn"
+        ],
+        "tight": [
+          "a photo of a narrow space between two houses"
+        ]
+      }
+    },
+    {
+      "id": "surface",
+      "classes": {
+        "driveway": [
+          "a photo of a snow covered driveway at a house"
+        ],
+        "lot": [
+          "a photo of a snow covered parking lot"
+        ],
+        "sidewalk": [
+          "a photo of a snowy sidewalk"
+        ],
+        "roof": [
+          "a photo of snow on a house roof"
+        ],
+        "street": [
+          "a photo of a snowy residential street"
+        ]
+      }
+    },
+    {
+      "id": "area",
+      "classes": {
+        "500": [
+          "a photo of a short single car driveway"
+        ],
+        "1000": [
+          "a photo of a wide two car driveway"
+        ],
+        "2500": [
+          "a photo of a long driveway"
+        ],
+        "10000": [
+          "a photo of a small parking lot"
+        ],
+        "40000": [
+          "a photo of a large parking lot"
+        ]
+      }
+    },
+    {
+      "id": "depth",
+      "classes": {
+        "1": [
+          "a photo of a light dusting of snow on the ground"
+        ],
+        "4": [
+          "a photo of a few inches of snow"
+        ],
+        "10": [
+          "a photo of deep snow"
+        ],
+        "18": [
+          "a photo of very deep snow drifts"
+        ]
+      }
+    },
+    {
+      "id": "ice",
+      "classes": {
+        "yes": [
+          "a photo of icy slippery pavement",
+          "a photo of a sheet of ice on a sidewalk"
+        ],
+        "no": [
+          "a photo of fresh fluffy snow",
+          "a photo of dry cleared pavement"
+        ]
+      }
+    },
+    {
+      "id": "cars",
+      "classes": {
+        "many": [
+          "a photo of a parking lot full of parked cars"
+        ],
+        "few": [
+          "a photo of an empty parking lot"
+        ]
+      }
+    },
+    {
+      "id": "walks",
+      "classes": {
+        "yes": [
+          "a photo of a sidewalk along the front of a property",
+          "a photo of a front walkway leading to a door"
+        ],
+        "no": [
+          "a photo of a driveway with no sidewalk"
+        ]
+      }
+    },
+    {
+      "id": "count",
+      "classes": {
+        "one": [
+          "a photo of a single tree"
+        ],
+        "few": [
+          "a photo of two or three trees close together"
+        ],
+        "many": [
+          "a photo of a row of many trees",
+          "a photo of a group of many trees"
+        ]
+      }
+    },
+    {
+      "id": "road",
+      "classes": {
+        "yes": [
+          "a photo of a tree right next to a road",
+          "a photo of a tree beside a busy street"
+        ],
+        "no": [
+          "a photo of a tree in a yard far from the street"
+        ]
+      }
+    },
+    {
+      "id": "vehicles",
+      "classes": {
+        "yes": [
+          "a photo of cars parked under a tree",
+          "a photo of a car parked right next to a tree"
+        ],
+        "no": [
+          "a photo of a tree with no cars nearby"
+        ]
+      }
+    },
+    {
+      "id": "slope",
+      "classes": {
+        "steep": [
+          "a photo of a tree on a steep hillside",
+          "a photo of a tree on a sloped yard"
+        ],
+        "flat": [
+          "a photo of a tree on flat level ground"
+        ]
+      }
+    },
+    {
+      "id": "brush",
+      "classes": {
+        "dense": [
+          "a photo of dense brush and thick undergrowth"
+        ],
+        "clear": [
+          "a photo of a clean mowed lawn under a tree"
+        ]
+      }
+    },
+    {
+      "id": "snowType",
+      "classes": {
+        "powder": [
+          "a photo of light fluffy powder snow"
+        ],
+        "wet": [
+          "a photo of heavy wet slushy snow"
+        ],
+        "packed": [
+          "a photo of hard packed snow and ice on pavement"
+        ]
+      }
+    },
+    {
+      "id": "piles",
+      "classes": {
+        "yes": [
+          "a photo of large piles of plowed snow"
+        ],
+        "no": [
+          "a photo of a snowy lot with no snow piles"
+        ]
+      }
+    },
+    {
+      "id": "tight",
+      "classes": {
+        "yes": [
+          "a photo of a narrow tight driveway between buildings"
+        ],
+        "no": [
+          "a photo of a wide open paved area"
+        ]
+      }
+    }
   ]
 }

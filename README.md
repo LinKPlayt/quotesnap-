@@ -92,20 +92,37 @@ photo (existing camera / gallery input, already shrunk to 1280 px)
 
 **Rebuilding the AI files** (only if you change the questions or the model): `npm run build:ai` (after `pip install torch transformers onnx onnxruntime onnxscript numpy pillow`). It exports and quantizes the model at a pinned revision, checks it against the original, re-embeds the prompts, and writes `config.json` with checksums.
 
-## How pricing works
+## How estimating works
 
-`js/engine.js` is a pure, tested estimating engine:
+Every estimate is planned with **your** company: the people and machines in **My Resources**, the speeds in **Production Rates**, and the costs in **Pricing Settings**. Nothing is hard-coded inside the AI, and the planner never assumes unlimited workers or equipment.
 
-1. **Hours**: base crew hours come from height and trunk diameter. They are then multiplied by species hardness, access, hazards and the removal method (crane < bucket < lift < climbing). Cleanup time is added for the debris option chosen.
-2. **Cost** = labor (person-hours × wage × burden) + equipment (hours × rate, with minimums) + materials + travel, plus overhead %.
-3. **Price** = cost ÷ (1 − target margin), rounded, with your minimum job charge applied.
+### My Resources (Settings → Business setup, or Resources in the menu)
+- **Workers**: name, role, skill level (beginner, intermediate, experienced, expert), hourly cost, overtime rate, active or inactive, and what they can run: heavy equipment, truck, loader, bucket truck, chipper, chainsaw.
+- **Equipment**: unlimited items with type (tree and snow categories), quantity owned, quantity available, purchase cost, operating, fuel and maintenance cost per hour, operator required, production rate, availability (available, in the shop, out of season), notes, and **attachments** (plow, salt spreader, snow pusher, snow bucket, grapple).
+- A sample crew and fleet ship with the app so estimates work on day one. Edit it or start empty.
 
-Every rate lives in the Price Book, so the numbers match *your* business.
+### How a job is planned (`js/planner.js`)
+1. The job is split into tasks (setup, cutting, chipping, log loading, hauling, stump grinding, cleanup, travel; or plowing, sidewalks, salting, roof, snow hauling).
+2. Each task's time = base time + quantity ÷ production rate, adjusted by condition multipliers (difficulty, access, power lines, slope, wet or frozen ground, heavy snow, ice…), tree size and species, removal method and the assigned crew's skill.
+3. The crew is picked from **active** workers, making sure someone can run each machine. Machines come only from what's **available**. Fewer people or machines than recommended makes the job take longer, and the quote says why: *"Estimated duration increased because only 1 loader is available."* Missing equipment is either planned around (for example climbing instead of a bucket truck) or priced as a **rental** and flagged.
+4. **Labor-hours** (crew × time) and **elapsed time** (clock time, including tasks that overlap) are kept separate.
+
+### Price (`Pricing Settings`)
+Labor + equipment + fuel + disposal (brush, logs, leaves, stumps, snow, general debris, per load) + travel (per mile, minimum charge, travel time paid for the crew) + other costs (materials, mobilization) + overhead = **total job cost**. Then the target gross margin, markups (emergency/urgent, storm, weekend, holiday, commercial, residential) and minimum profit give the **recommended selling price**. Overtime rates apply to emergency, storm, weekend and holiday jobs.
+
+### Production Rates
+An editable record per task: job type, task, minimum and recommended crew, equipment, production unit, rate, base time, notes, plus how strongly the task is affected by difficulty, access, cleanup, crew experience and weather. All difficulty multipliers (easy 1.00× … extremely difficult 2.00×, and every job condition) are editable on the same page.
+
+### Learning from completed jobs (controlled, never automatic)
+When a customer accepts, the original estimate is frozen. After the job, set the quote to **Completed** and fill in **Actual job**: workers, equipment, start and finish, labor and equipment hours, fuel, disposal, travel, materials, total cost, selling price, problems, weather, difficulty and notes. The quote shows **estimated vs actual**. Once 3 or more completed jobs show the same task running 10%+ fast or slow, **Production Rates → Learn from completed jobs** suggests a new rate. It changes only when you tap **Apply**, and every change is logged.
+
+### AI job analysis
+Photos produce a structured analysis with **ranges and a confidence for each item**. Tree jobs: number of trees, species, height, trunk and branch size, condition, nearby buildings, power lines, roads and vehicles, front or back yard, access, slope, brush, logs, debris and stump size. Snow jobs: area, driveway or lot size, parking spaces, sidewalks, depth, snow type, ice, existing piles, plowing difficulty, obstacles and tight areas. Required equipment and crew come from the planner. Things a photo can't show (lean direction, gate width, number of entrances) say so instead of guessing.
 
 ## Develop
 
 ```bash
-npm test             # node --test: engine, auto-fill and on-device AI interpretation tests
+npm test             # node --test: engine, planner, learning, auto-fill and on-device AI tests
 npm run build:ai     # optional: rebuild models/tinyclip-vit-8m-16 (Python, see On-device AI)
 ```
 
@@ -113,7 +130,11 @@ npm run build:ai     # optional: rebuild models/tinyclip-vit-8m-16 (Python, see 
 index.html           app shell
 css/styles.css       UI + print (PDF) styles, light/dark
 js/app.js            views: dashboard, editor, documents, send/sign, price book, settings
-js/engine.js         parsing + estimating engine (no DOM)
+js/engine.js         parsing, scope of work, customer options (no DOM)
+js/planner.js        resource-aware task planning, bottlenecks, cost and price
+js/company.js        workers, equipment, production rates, multipliers (defaults + sample)
+js/learning.js       estimated vs actual, rate suggestions
+js/views-company.js  My Resources, Production Rates, Pricing Settings pages
 js/pricebook.js      default rates
 js/ai.js             optional Claude cloud photo analysis (schema + prompt)
 js/localai/          on-device AI: manager (page side), worker (ONNX Runtime), interpret (scores → fields)

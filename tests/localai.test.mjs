@@ -95,3 +95,29 @@ test('merges into a job like the cloud result: only adds hazards, keeps emergenc
   assert.equal(out.emergency, true);
   assert.equal(out.tree.trees[0].species, 'oak');
 });
+
+test('structured analysis: ranges with confidence, and honest "can\'t tell"', () => {
+  const r = interpret([photo('oak_5')]);
+  const by = Object.fromEntries(r.analysis.map((a) => [a.key, a]));
+  assert.match(by.height.value, /About \d+–\d+ ft/);
+  assert.ok(by.height.confidence > 0 && by.height.confidence <= 1);
+  assert.match(by.dbh.value, /in/);
+  assert.ok(by.dbh.confidence < by.height.confidence, 'trunk is derived, so less sure');
+  assert.equal(by.lean.confidence, null);
+  assert.equal(by.gate.confidence, null);
+  for (const k of ['count', 'species', 'condition', 'buildings', 'powerLines', 'road', 'vehicles', 'yard', 'access', 'slope', 'brushVol', 'logVol', 'stump']) assert.ok(by[k], k);
+});
+
+test('roads and dense brush become job conditions when clear', () => {
+  assert.equal(interpret([photo('leaning_0')]).conditions.nearRoad, true);
+  assert.equal(interpret([photo('spruce_4')]).conditions.denseBrush, true);
+  assert.equal(interpret([photo('maple_0')]).conditions.nearRoad, undefined);
+});
+
+test('snow analysis: area, spaces, depth, snow type, entrances unknown', () => {
+  const by = Object.fromEntries(interpret([photo('lot_snow_4')]).analysis.map((a) => [a.key, a]));
+  assert.match(by.area.value, /sq ft/);
+  assert.match(by.spaces.value, /About/);
+  assert.ok(by.depth && by.snowType && by.piles && by.tight);
+  assert.equal(by.entrances.confidence, null);
+});

@@ -8,6 +8,9 @@ import { getPosition, reverseGeocode, geocode, roadMiles, forecast, stormAlerts,
 import { makePdf } from './pdf.js';
 import { localAI } from './localai/manager.js';
 import { interpret } from './localai/interpret.js';
+import { mergeCompany, DEFAULT_MULTIPLIERS } from './company.js';
+import { snapshotEstimate, compareJob, newActual, actualSiteHours } from './learning.js';
+import { viewResources, viewRates, viewPricing } from './views-company.js';
 
 // ---------------------------------------------------------------- state
 
@@ -65,8 +68,10 @@ async function load() {
   for (const k of ['business', 'ai', 'geo']) S.settings[k] = { ...DEFAULT_SETTINGS[k], ...(saved[k] || {}) };
   S.pricebook = mergePricebook(await kv.get('pricebook'));
   S.estimates = (await kv.get('estimates')) || [];
+  S.company = mergeCompany(await kv.get('company'));
 }
 const saveSettings = () => kv.set('settings', S.settings);
+const saveCompany = () => kv.set('company', S.company);
 const savePricebook = () => kv.set('pricebook', S.pricebook);
 const saveEstimates = () => kv.set('estimates', S.estimates);
 
@@ -118,10 +123,10 @@ function newEstimate(division = 'tree', customer) {
 function compute(est) {
   const pb = S.pricebook;
   const margin = est.marginPct ?? pb.targetMarginPct;
-  const options = buildOptions(est.job, pb, margin);
+  const options = buildOptions(est.job, pb, margin, S.company);
   const sel = options.find((o) => o.id === est.selectedOption) || options.find((o) => o.recommended) || options[0];
   const t = totals(sel.est.price, { discount: est.discount, adjustments: est.adjustments, taxPct: pb.taxPct, depositPct: pb.depositPct });
-  const tiers = est.job.division === 'snow' ? snowDepthTiers(est.job, pb, margin) : null;
+  const tiers = est.job.division === 'snow' ? snowDepthTiers(est.job, pb, margin, S.company) : null;
   return { options, sel, t, tiers, margin };
 }
 
@@ -161,6 +166,11 @@ function setStatus(est, status) {
   est.status = status;
   est[status + 'At'] = new Date().toISOString();
   logHistory(est, `Status → ${status}`);
+  // freeze the original estimate when the customer says yes (used to learn from actual results)
+  if (WON.includes(status) && !est.original) {
+    const { sel } = compute(est);
+    est.original = snapshotEstimate(sel.est, sel.name);
+  }
 }
 
 function isEmptyDraft(e) {
@@ -213,6 +223,26 @@ async function runAi(id, { auto = false } = {}) {
   }
 }
 
+// The cloud analyzer gives single numbers; show them as estimates with its overall confidence.
+function cloudAnalysis(a) {
+  const c = { high: 0.8, medium: 0.6, low: 0.4 }[a.confidence] ?? 0.5;
+  const t = a.tree?.trees?.[0];
+  const rows = [];
+  if (a.division === 'tree' && t) {
+    rows.push({ key: 'count', label: 'Number of trees', value: String((a.tree.trees || []).reduce((n, x) => n + (x.qty || 1), 0)), confidence: c });
+    if (t.species) rows.push({ key: 'species', label: 'Species', value: t.species, confidence: c });
+    if (t.heightFt) rows.push({ key: 'height', label: 'Tree height', value: `About ${Math.round(t.heightFt * 0.9)}–${Math.round(t.heightFt * 1.1)} ft`, confidence: c });
+    if (t.dbhIn) rows.push({ key: 'dbh', label: 'Trunk diameter', value: `About ${Math.round(t.dbhIn * 0.85)}–${Math.round(t.dbhIn * 1.15)} in`, confidence: c * 0.8 });
+    if (t.condition) rows.push({ key: 'condition', label: 'Condition', value: t.condition, confidence: c });
+    rows.push({ key: 'lean', label: 'Lean direction', value: 'Check on site', confidence: null });
+  } else if (a.division === 'snow') {
+    if (a.snow?.areaSqft) rows.push({ key: 'area', label: 'Paved area', value: `About ${Math.round(a.snow.areaSqft * 0.8).toLocaleString()}–${Math.round(a.snow.areaSqft * 1.2).toLocaleString()} sq ft`, confidence: c });
+    if (a.snow?.depthIn) rows.push({ key: 'depth', label: 'Snow depth', value: `About ${a.snow.depthIn} in`, confidence: c });
+    rows.push({ key: 'entrances', label: 'Entrances', value: 'Count on site', confidence: null });
+  }
+  return rows;
+}
+
 function applyAiResult(est, a) {
   const parsed = aiToParsed(a);
   const before = { job: structuredClone(est.job), customer: { ...est.customer } };
@@ -243,6 +273,7 @@ function applyAiResult(est, a) {
     photoCaptions: a.photoCaptions || [],
     upsells: (a.upsells || []).map((u) => ({ ...u, added: false })),
     conditions: (a.tree?.trees || []).map((t) => t.condition).filter(Boolean),
+    analysis: a.analysis || cloudAnalysis(a),
     changes: keepPrev ? prev.changes : changes,
     undo: keepPrev ? prev.undo : before,
   };
@@ -338,7 +369,9 @@ async function route() {
   if (name === 'doc') return viewDoc(parts[1], q.get('t') || 'quote');
   if (name === 'estimates') return viewList(q.get('s') || 'all');
   if (name === 'customers') return viewCustomers();
-  if (name === 'pricebook') return viewPricebook();
+  if (name === 'pricebook') return viewPricing(pageCtx());
+  if (name === 'resources') return viewResources(pageCtx());
+  if (name === 'rates') return viewRates(pageCtx());
   if (name === 'settings') return viewSettings();
   app.innerHTML = '<div class="empty">Not found. <a href="#/">Go home</a></div>';
 }
@@ -447,7 +480,8 @@ function viewDashboard() {
         <p>Tap <b>Snap a job</b>, take a few photos of the tree or the driveway, and QuoteSnap builds the scope, labor, equipment, materials, price and a PDF quote.</p>
       </div>`}
     </div>
-    ${S.settings.business.name === DEFAULT_SETTINGS.business.name ? `<div class="callout">Set your business name, logo and phone in <a href="#/settings">Settings</a>, and your wages and equipment rates in the <a href="#/pricebook">Price Book</a>, so quotes match your numbers.</div>` : ''}
+    ${S.company.sample ? `<div class="callout">Quotes are planned with a <b>sample crew and equipment</b>. Set up <a href="#/resources">My Resources</a> (your workers and machines), <a href="#/rates">Production Rates</a> and <a href="#/pricebook">Pricing</a> so every estimate matches your company.</div>` : ''}
+    ${S.settings.business.name === DEFAULT_SETTINGS.business.name ? `<div class="callout">Set your business name, logo and phone in <a href="#/settings">Settings</a>.</div>` : ''}
   `;
   for (const id of ['snapcam', 'snapgal']) $('#' + id).onchange = (ev) => createFromPhotos([...ev.target.files]);
   renderAiChip();
@@ -584,7 +618,7 @@ const AREAS = [['1-car', 500], ['2-car', 1000], ['3-car', 1500], ['Long drive', 
 async function viewEditor(id) {
   const est = S.estimates.find((e) => e.id === id);
   if (!est) { app.innerHTML = '<div class="empty">Quote not found. <a href="#/estimates">Back to quotes</a></div>'; return; }
-  ED = { est: structuredClone(est), tab: 'scope' };
+  ED = { est: structuredClone(est), tab: 'plan' };
   const e = ED.est;
   e.locks ||= {};
   e.aiFields ||= [];
@@ -676,6 +710,7 @@ async function viewEditor(id) {
             <a class="btn" href="#/doc/${e.id}?t=invoice">💵 Invoice</a>
           </div>
           <div id="sched"></div>
+          <div id="actual"></div>
           <div class="row" style="margin-top:.75rem"><button class="btn sm" id="dup">⧉ Duplicate</button><div class="spacer"></div><button class="btn sm danger" id="del">Delete quote</button></div>
           <h3>History</h3>
           <div class="small muted" id="hist"></div>
@@ -780,6 +815,7 @@ function renderAiOut() {
     ${a.upsells?.length ? `<div class="upsells"><div class="tiny muted" style="margin:.4rem 0 .2rem">EXTRA WORK TO OFFER</div>${a.upsells.map((u, i) => `
       <div class="upsell"><div style="flex:1"><b>${esc(u.label)}</b><div class="tiny muted">${esc(u.reason)}</div></div>
       <button class="btn sm" data-up="${i}" ${u.added ? 'disabled' : ''}>${u.added ? '✓ Added' : '+ Add'}</button></div>`).join('')}</div>` : ''}
+    ${analysisTable(e)}
     ${a.observations?.length ? `<details style="margin-top:.4rem"><summary class="small"><b>Check on site (${a.observations.length})</b></summary><ul class="scope small">${a.observations.map((o) => `<li>${esc(o)}</li>`).join('')}</ul></details>` : ''}
     <div class="tiny muted" style="margin-top:.4rem">Fields AI filled are outlined in purple. Change anything and it stays your way. Prices always come from your Price Book.</div>
   </div>`;
@@ -794,6 +830,21 @@ function renderAiOut() {
     toast('Undone');
   };
   $$('[data-up]', el).forEach((b) => (b.onclick = () => addUpsell(+b.dataset.up)));
+}
+
+function analysisTable(e) {
+  const rows = e.ai?.analysis || [];
+  if (!rows.length) return '';
+  const x = compute(e).sel.est;
+  const need = (x.required || []).filter((r) => r.label !== 'Workers').map((r) => `${r.used} ${r.label.toLowerCase()}${r.rental ? ' (rental)' : ''}`).join(', ');
+  const all = [...rows,
+    { label: 'Required equipment', value: need || 'Hand tools', confidence: null, note: 'From your production rates and My Resources.' },
+    { label: 'Estimated crew size', value: `${x.crew} worker${x.crew === 1 ? '' : 's'} · ${x.elapsedHours} h elapsed · ${x.personHours} labor-hours`, confidence: null, note: 'From your production rates and My Resources.' }];
+  const bar = (c) => (c === null || c === undefined ? '<span class="muted">—</span>' : `<span class="conf"><i style="width:${Math.round(c * 100)}%"></i></span> ${Math.round(c * 100)}%`);
+  return `<details style="margin-top:.4rem" open><summary class="small"><b>Job analysis (${rows.length} items)</b></summary>
+    <table class="t small" style="margin-top:.3rem"><tr><th>Item</th><th>Estimate</th><th class="n">Confidence</th></tr>
+    ${all.map((r) => `<tr><td>${esc(r.label)}</td><td>${esc(r.value)}${r.note ? `<div class="tiny muted">${esc(r.note)}</div>` : ''}</td><td class="n">${bar(r.confidence)}</td></tr>`).join('')}</table>
+    <div class="tiny muted">Ranges are estimates from photos, not measurements. "—" means it can't be judged from a photo.</div></details>`;
 }
 
 function addUpsell(i) {
@@ -863,7 +914,17 @@ function renderDetails() {
   const e = ED.est;
   const j = e.job;
   const el = $('#details');
-  $('#siteflags').innerHTML = check('🚨 Emergency / storm', 'job.emergency', j.emergency) + (j.division === 'tree' ? check('Permit needed', 'job.permit', j.permit) : '');
+  const M = S.company.multipliers;
+  $('#siteflags').innerHTML = `
+    <div class="grid g2" style="width:100%">
+      <label class="f">Overall difficulty<select data-k="job.difficulty">${Object.entries(M.difficulty).map(([k, m]) => opt(k, `${m.label} (${m.value}×)`, j.difficulty || 'normal')).join('')}</select></label>
+      ${j.division === 'tree' ? `<label class="f">Property<select data-k="job.property">${opt('residential', 'Residential', j.property || 'residential')}${opt('commercial', 'Commercial', j.property)}</select></label>` : ''}
+    </div>
+    <div class="chips" style="width:100%">${check('🚨 Emergency / urgent', 'job.emergency', j.emergency)}${check('🌪 Storm response', 'job.storm', j.storm)}${check('Weekend', 'job.weekend', j.weekend)}${check('Holiday', 'job.holiday', j.holiday)}${j.division === 'tree' ? check('Permit needed', 'job.permit', j.permit) : ''}</div>`;
+  const condChips = Object.entries(M.conditions)
+    .filter(([k, c]) => (c.division === 'both' || c.division === j.division) && !(j.division === 'tree' && ['powerLines', 'overHouse', 'nearStructure', 'dead', 'leaning', 'fenceGarden'].includes(k)))
+    .map(([k, c]) => check(`${c.label} <span class="tiny muted">${c.value}×</span>`, `job.conditions.${k}`, j.conditions?.[k])).join('');
+  const condBlock = `<h3>Job conditions</h3><div class="chips">${condChips}</div><div class="tiny muted" style="margin-top:.3rem">Multipliers are set in <a href="#/rates">Production Rates</a>.</div>`;
   if (j.division === 'tree') {
     const t = j.tree;
     const last = t.trees.length - 1;
@@ -903,6 +964,7 @@ function renderDetails() {
         ${check('Restore lawn (soil + seed)', 'job.tree.restore', t.restore)}
         ${check('Cut firewood', 'job.tree.firewood', t.firewood)}
       </div>
+      ${condBlock}
       ${e.ai?.conditions?.length ? `<div class="muted tiny" style="margin-top:.5rem">AI condition notes: ${e.ai.conditions.map(esc).join(' · ')}</div>` : ''}`;
     $('#addtree').onclick = () => { t.trees.push(newTree()); e.locks[`job.tree.trees.${t.trees.length - 1}.work`] = true; renderDetails(); changed(); };
     $$('[data-rmtree]').forEach((b) => (b.onclick = () => {
@@ -919,7 +981,7 @@ function renderDetails() {
       <div class="quick"><span class="tiny muted">Area:</span>${AREAS.map(([l, v]) => `<button class="qchip ${+s.areaSqft === v ? 'on' : ''}" data-qa="${v}">${l}</button>`).join('')}</div>
       <div class="grid g2">
         <label class="f">Property<select data-k="job.snow.property">${opt('residential', 'Residential', s.property)}${opt('commercial', 'Commercial', s.property)}</select></label>
-        <label class="f">Equipment<select data-k="job.snow.method">${opt('auto', 'Auto-recommend', s.method)}${opt('plow', 'Plow truck', s.method)}${opt('skid', 'Skid steer / pusher', s.method)}${opt('blower', 'Snow blower', s.method)}${opt('shovel', 'Shovel crew', s.method)}</select></label>
+        <label class="f">Equipment<select data-k="job.snow.method">${opt('auto', 'Auto-recommend', s.method)}${opt('plow', 'Plow truck', s.method)}${opt('skid', 'Skid steer / pusher', s.method)}${opt('loader', 'Wheel loader / pusher', s.method)}${opt('blower', 'Snow blower', s.method)}${opt('shovel', 'Shovel crew', s.method)}</select></label>
         ${numField('Paved area (sq ft)', 'job.snow.areaSqft', s.areaSqft)}
         ${numField('Sidewalks (linear ft)', 'job.snow.walkLf', s.walkLf)}
         ${numField('Design snow depth (in)', 'job.snow.depthIn', s.depthIn)}
@@ -932,7 +994,9 @@ function renderDetails() {
       <div class="chips">
         ${check('🧂 Salt / de-ice', 'job.snow.salt', s.salt)}
         ${check('⭐ Priority (before 7 AM)', 'job.snow.priority', s.priority)}
+        ${check('🚚 Haul snow off site', 'job.snow.haul', s.haul)}
       </div>
+      ${condBlock}
       <h3>Quote as</h3>
       <label class="f"><select data-k="job.snow.contract">${opt('perPush', 'Per push (pay per visit)', s.contract)}${opt('seasonal', 'Seasonal contract', s.contract)}</select></label>`;
     $$('[data-qa]').forEach((b) => (b.onclick = () => {
@@ -983,8 +1047,51 @@ function renderHistory() {
   if (h) h.innerHTML = (ED.est.history || []).slice().reverse().map((x) => `<div>${fmtDate(x.at)}: ${esc(x.text)}</div>`).join('');
 }
 
+function renderActual() {
+  const e = ED.est;
+  const box = $('#actual');
+  if (!box) return;
+  if (!['completed', 'paid'].includes(e.status)) { box.innerHTML = WON.includes(e.status) ? '<div class="tiny muted" style="margin-top:.6rem">After the job, set the status to <b>Completed</b> to record what actually happened.</div>' : ''; return; }
+  if (!e.original) { const { sel } = compute(e); e.original = snapshotEstimate(sel.est, sel.name); }
+  if (!e.actual) {
+    e.actual = newActual(e.original);
+    e.actual.price = compute(e).t.total;
+    e.actual.workerNames = (compute(e).sel.est.crewMembers || []).map((w) => w.name).join(', ');
+  }
+  const a = e.actual;
+  const f = (label, k, type = 'number', ph = '') => `<label class="f">${label}<input type="${type}" ${type === 'number' ? 'step="any" inputmode="decimal"' : ''} data-act="${k}" value="${esc(a[k] ?? '')}" placeholder="${esc(ph)}"></label>`;
+  const rows = compareJob(e.original, a);
+  box.innerHTML = `<h3>📋 Actual job</h3>
+    <div class="tiny muted">The original estimate was saved on ${fmtDate(e.original.at)}. Enter what really happened; the comparison and the rate suggestions in <a href="#/rates">Production Rates</a> update.</div>
+    <div class="grid g2" style="margin-top:.5rem">
+      ${f('Actual workers', 'workers')}${f('Who worked', 'workerNames', 'text', 'Names')}
+      ${f('Start', 'start', 'datetime-local')}${f('Finish', 'finish', 'datetime-local')}
+      ${f('Labor-hours', 'laborHours')}${f('Equipment hours', 'equipmentHours')}
+      ${f('Equipment used', 'equipment', 'text', 'Bucket truck, chipper…')}${f('Travel time (h)', 'travelHours')}
+      ${f('Fuel ($)', 'fuel')}${f('Disposal ($)', 'disposal')}
+      ${f('Materials ($)', 'materials')}${f('Total cost ($)', 'totalCost')}
+      ${f('Selling price ($)', 'price')}
+      <label class="f">Difficulty<select data-act="difficulty">${['easier than expected', 'as expected', 'harder than expected', 'much harder'].map((d) => opt(d, cap(d), a.difficulty)).join('')}</select></label>
+      ${f('Weather', 'weather', 'text', 'Dry, rain, frozen ground…')}${f('Problems encountered', 'problems', 'text', 'Hidden rot, blocked access…')}
+    </div>
+    <label class="f" style="margin-top:.5rem">Notes<textarea data-act="notes" style="min-height:60px">${esc(a.notes || '')}</textarea></label>
+    <h3>Estimated vs actual</h3>
+    <table class="t"><tr><th>Item</th><th class="n">Estimated</th><th class="n">Actual</th><th class="n">Diff</th></tr>
+    ${rows.map((r) => { const fm = (v) => (v === null || v === undefined ? '—' : r.unit === '$' ? money(v) : `${v}${r.unit ? ' ' + r.unit : ''}`); return `<tr><td>${esc(r.label)}</td><td class="n">${fm(r.est)}</td><td class="n">${fm(r.act)}</td><td class="n ${r.pct !== null && Math.abs(r.pct) > 10 ? 'bad' : ''}">${r.diff === null ? '' : `${r.diff > 0 ? '+' : ''}${r.unit === '$' ? money(r.diff) : r.diff}${r.pct !== null ? ` (${r.pct > 0 ? '+' : ''}${r.pct}%)` : ''}`}</td></tr>`; }).join('')}</table>`;
+  const onAct = (ev) => {
+    const k = ev.target.dataset.act;
+    if (!k) return;
+    a[k] = ev.target.value;
+    clearTimeout(onAct.t);
+    onAct.t = setTimeout(() => { changed(); const active = document.activeElement?.dataset?.act; renderActual(); if (active) { const el = $(`[data-act="${active}"]`); if (el) { el.focus(); if (el.setSelectionRange && el.type === 'text') el.setSelectionRange(el.value.length, el.value.length); } } }, 900);
+  };
+  box.oninput = onAct;
+  box.onchange = onAct;
+}
+
 function renderSchedule() {
   const e = ED.est;
+  renderActual();
   const box = $('#sched');
   if (!box) return;
   if (!WON.includes(e.status)) { box.innerHTML = ''; return; }
@@ -1043,31 +1150,50 @@ function renderResults() {
       </button>`).join('')}</div>` : ''}`;
   $$('[data-opt]').forEach((b) => (b.onclick = () => { e.selectedOption = b.dataset.opt; renderResults(); changed(false); }));
 
-  const tabs = { scope: 'Scope', labor: 'Labor', equip: 'Equipment', mat: 'Materials', profit: 'Profit', safety: 'Safety' };
+  const tabs = { plan: `Breakdown${x.notes?.length ? ` <span class="badge sent">${x.notes.length}</span>` : ''}`, scope: 'Scope', labor: 'Labor', equip: 'Equipment', mat: 'Disposal & materials', profit: 'Profit', safety: 'Safety' };
   let body = '';
-  if (ED.tab === 'scope') {
+  if (ED.tab === 'plan') {
+    body = `<div class="grid g3">
+        <div class="kpi"><div class="l">Elapsed job time</div><div class="v">${x.elapsedHours} h</div><div class="muted tiny">${x.siteHours} h on site + ${x.travelHours} h travel${x.days > 1 ? ` · ${x.days} days` : ''}</div></div>
+        <div class="kpi"><div class="l">Crew</div><div class="v">${x.crew}</div><div class="muted tiny">${x.recCrew && x.recCrew !== x.crew ? `${x.recCrew} recommended` : 'workers'}</div></div>
+        <div class="kpi"><div class="l">Labor-hours</div><div class="v">${x.personHours} h</div><div class="muted tiny">${x.crew} × ${x.elapsedHours} h</div></div>
+      </div>
+      ${(x.notes || []).map((n) => `<div class="callout small">⚠ ${esc(n)}</div>`).join('')}
+      ${x.conditions?.length ? `<div class="chips" style="margin:.5rem 0"><span class="tiny muted">Conditions:</span>${x.conditions.map((c) => `<span class="chip">${esc(c)}</span>`).join('')}</div>` : ''}
+      <h3>Work breakdown${x.seasonal ? ' (per visit)' : ''}</h3>
+      <table class="t"><tr><th>Task</th><th class="n">Workers</th><th class="n">Hours</th></tr>
+      ${x.tasks.map((k) => `<tr><td>${esc(k.label)}${k.equipment?.length ? `<div class="tiny muted">${esc(k.equipment.join(', '))}</div>` : ''}${k.parallel ? '<div class="tiny muted">runs alongside the other processing task</div>' : ''}${k.overlaps ? '<div class="tiny muted">runs while the crew keeps working</div>' : ''}</td><td class="n">${k.workers ?? ''}</td><td class="n">${k.hours} h</td></tr>`).join('')}
+      <tfoot><tr><td>Elapsed time (some tasks overlap)</td><td class="n">${x.crew}</td><td class="n">${x.elapsedHours} h</td></tr></tfoot></table>
+      <h3>Resources</h3>
+      <table class="t"><tr><th>Resource</th><th class="n">Used</th><th class="n">Available</th></tr>
+      ${(x.required || []).map((r) => `<tr><td>${esc(r.label)}${r.rental ? ' <span class="badge sent">rental</span>' : ''}${r.recommended && r.recommended > r.used ? ` <span class="tiny muted">${r.recommended} recommended</span>` : ''}</td><td class="n">${r.used}</td><td class="n">${r.available}</td></tr>`).join('')}</table>
+      <div class="tiny muted" style="margin-top:.4rem">Planned with your <a href="#/resources">workers and equipment</a> and <a href="#/rates">production rates</a>.</div>`;
+  } else if (ED.tab === 'scope') {
     body = `<ul class="scope">${sel.scope.map((s) => `<li>${esc(s)}</li>`).join('')}</ul>
       ${tiers ? `<h3>Price by snowfall</h3><table class="t"><tr>${tiers.map((r) => `<th class="n">${r.label}</th>`).join('')}</tr><tr>${tiers.map((r) => `<td class="n">${money(r.price)}</td>`).join('')}</tr></table>` : ''}`;
   } else if (ED.tab === 'labor') {
     body = `<table class="t"><tr><th>Item</th><th class="n">Value</th></tr>
       <tr><td>Crew size</td><td class="n">${x.labor.crew}</td></tr>
-      <tr><td>On-site hours</td><td class="n">${x.labor.siteHours} h</td></tr>
+      ${(x.crewMembers || []).length ? `<tr><td colspan="2" class="small muted">${x.crewMembers.map((w) => `${esc(w.name)} (${esc(w.skill)})`).join(', ')}</td></tr>` : ''}
+      <tr><td>Time on site (elapsed)</td><td class="n">${x.siteHours} h</td></tr>
+      <tr><td>Travel time</td><td class="n">${x.travelHours} h</td></tr>
       ${x.grindHours ? `<tr><td>Stump grinding (1 operator)</td><td class="n">${x.grindHours} h</td></tr>` : ''}
-      <tr><td>Total person-hours</td><td class="n">${x.labor.personHours} h</td></tr>
-      <tr><td>Loaded wage${e.job.emergency ? ' (emergency rate)' : ''}</td><td class="n">$${x.labor.wage}/h</td></tr>
+      <tr><td>Labor-hours (crew × elapsed)</td><td class="n">${x.labor.personHours} h</td></tr>
+      <tr><td>Average loaded rate${x.labor.overtime ? ' (overtime)' : ''}</td><td class="n">$${x.labor.wage}/h</td></tr>
       <tr><td>Schedule</td><td class="n">${x.days} day${x.days > 1 ? 's' : ''}</td></tr>
       ${x.seasonal ? `<tr><td>Season events</td><td class="n">${x.events}</td></tr>` : ''}
       <tfoot><tr><td>Labor cost${x.seasonal ? ' / visit' : ''}</td><td class="n">${money(x.labor.cost)}</td></tr></tfoot></table>`;
   } else if (ED.tab === 'equip') {
     body = `${x.reasons.map((r) => `<div class="callout ai small">💡 ${esc(r)}</div>`).join('')}
-      <table class="t"><tr><th>Equipment</th><th class="n">Hours</th><th class="n">Rate</th><th class="n">Cost</th></tr>
-      ${x.equipment.map((q) => `<tr><td>${esc(q.label)}</td><td class="n">${q.hours}</td><td class="n">$${q.rate}</td><td class="n">${money(q.cost)}</td></tr>`).join('')}
-      <tfoot><tr><td colspan="3">Equipment cost${x.seasonal ? ' / visit' : ''}</td><td class="n">${money(x.equipmentCost)}</td></tr></tfoot></table>`;
+      <table class="t"><tr><th>Equipment</th><th class="n">Hours</th><th class="n">$/hr</th><th class="n">Cost</th><th class="n">Fuel</th></tr>
+      ${x.equipment.map((q) => `<tr><td>${esc(q.label)}${q.task ? `<div class="tiny muted">${esc(q.task)}</div>` : ''}</td><td class="n">${q.hours}</td><td class="n">$${q.rate}</td><td class="n">${money(q.cost)}</td><td class="n">${money(q.fuel || 0)}</td></tr>`).join('')}
+      <tfoot><tr><td colspan="3">Equipment + fuel${x.seasonal ? ' / visit' : ''}</td><td class="n">${money(x.equipmentCost)}</td><td class="n">${money(x.fuelCost || 0)}</td></tr></tfoot></table>
+      <div class="tiny muted" style="margin-top:.3rem">Owned equipment costs come from <a href="#/resources">My Resources</a> (operating + maintenance); rentals from <a href="#/pricebook">Pricing</a>.</div>`;
   } else if (ED.tab === 'mat') {
     body = `<table class="t"><tr><th>Material</th><th class="n">Qty</th><th class="n">Cost</th></tr>
       ${x.materials.map((m) => `<tr><td>${esc(m.label)}</td><td class="n">${m.qty} ${esc(m.unit)}</td><td class="n">${money(m.cost)}</td></tr>`).join('')}
       ${x.travel ? `<tr><td>Travel</td><td class="n">${e.job.miles} mi</td><td class="n">${money(x.travel)}</td></tr>` : ''}
-      <tfoot><tr><td colspan="2">Materials & travel${x.seasonal ? ' / visit' : ''}</td><td class="n">${money(x.materialCost + x.travel)}</td></tr></tfoot></table>
+      <tfoot><tr><td colspan="2">Disposal, materials & travel${x.seasonal ? ' / visit' : ''}</td><td class="n">${money(x.materialCost + x.travel)}</td></tr></tfoot></table>
       ${x.volumeYd ? `<div class="muted small" style="margin-top:.4rem">≈ ${Math.round(x.volumeYd)} yd³ of wood & brush, ${x.loads} load(s) hauled.</div>` : ''}
       ${x.saltLbs ? `<div class="muted small" style="margin-top:.4rem">${x.saltLbs} lb salt per application.</div>` : ''}`;
   } else if (ED.tab === 'profit') {
@@ -1076,15 +1202,21 @@ function renderResults() {
     const pv = x.seasonal ? x.price / x.events : x.price;
     const sg = (v, c) => `<span style="width:${Math.max(0, (v / pv) * 100)}%;background:${c}"></span>`;
     body = `${x.seasonal ? `<div class="muted small">Per visit: ${money(pv)} price vs ${money(x.fullCost / x.events)} cost · Season profit ${money(x.profit)}</div>` : ''}
-      <div class="profit-bar">${sg(x.laborCost, '#3f8f63')}${sg(x.equipmentCost, '#c8781e')}${sg(x.materialCost + x.travel, '#8b6bd1')}${sg(x.overhead, '#8d9a91')}${sg(pv - x.laborCost - x.equipmentCost - x.materialCost - x.travel - x.overhead, '#1f5d8f')}</div>
-      <div class="legend"><span><i style="background:#3f8f63"></i>Labor</span><span><i style="background:#c8781e"></i>Equipment</span><span><i style="background:#8b6bd1"></i>Materials</span><span><i style="background:#8d9a91"></i>Overhead</span><span><i style="background:#1f5d8f"></i>Profit</span></div>
+      <div class="profit-bar">${sg(x.laborCost, '#3f8f63')}${sg(x.equipmentCost + (x.fuelCost || 0), '#c8781e')}${sg(x.materialCost + x.travel, '#8b6bd1')}${sg(x.overhead, '#8d9a91')}${sg(pv - x.laborCost - x.equipmentCost - (x.fuelCost || 0) - x.materialCost - x.travel - x.overhead, '#1f5d8f')}</div>
+      <div class="legend"><span><i style="background:#3f8f63"></i>Labor</span><span><i style="background:#c8781e"></i>Equipment + fuel</span><span><i style="background:#8b6bd1"></i>Disposal, materials, travel</span><span><i style="background:#8d9a91"></i>Overhead</span><span><i style="background:#1f5d8f"></i>Profit</span></div>
       <table class="t" style="margin-top:.6rem">
-        <tr><td>Labor${pvLabel}</td><td class="n">${money(x.laborCost)}</td></tr>
-        <tr><td>Equipment${pvLabel}</td><td class="n">${money(x.equipmentCost)}</td></tr>
-        <tr><td>Materials & travel${pvLabel}</td><td class="n">${money(x.materialCost + x.travel)}</td></tr>
+        <tr><td>Labor cost${pvLabel}</td><td class="n">${money(x.laborCost)}</td></tr>
+        <tr><td>Equipment cost${pvLabel}</td><td class="n">${money(x.equipmentCost)}</td></tr>
+        <tr><td>Fuel cost${pvLabel}</td><td class="n">${money(x.fuelCost || 0)}</td></tr>
+        <tr><td>Disposal cost${pvLabel}</td><td class="n">${money(x.disposalCost || 0)}</td></tr>
+        <tr><td>Travel cost${pvLabel}</td><td class="n">${money(x.travel)}</td></tr>
+        <tr><td>Other costs (materials, mobilization)${pvLabel}</td><td class="n">${money(x.otherCost ?? 0)}</td></tr>
         <tr><td>Overhead (${S.pricebook.overheadPct}%)${pvLabel}</td><td class="n">${money(x.overhead)}</td></tr>
-        <tr><td><b>Total cost${per}</b></td><td class="n"><b>${money(x.fullCost)}</b></td></tr>
-        <tr><td>Price${per}</td><td class="n">${money(x.price)}</td></tr>
+        <tr><td><b>Total job cost${per}</b></td><td class="n"><b>${money(x.fullCost)}</b></td></tr>
+        ${!x.seasonal && x.basePrice ? `<tr><td>At ${margin}% target margin</td><td class="n">${money(x.basePrice)}</td></tr>` : ''}
+        ${!x.seasonal ? (x.markups || []).map((m) => `<tr><td>+ ${esc(m.label)} markup</td><td class="n">${m.pct}%</td></tr>`).join('') : ''}
+        ${!x.seasonal ? (x.priceNotes || []).map((n) => `<tr><td colspan="2" class="tiny muted">${esc(n)}</td></tr>`).join('') : ''}
+        <tr><td><b>Recommended selling price${per}</b></td><td class="n"><b>${money(x.price)}</b></td></tr>
         ${t.adj ? `<tr><td>Adjustments</td><td class="n">${money(t.adj)}</td></tr>` : ''}
         ${e.discount ? `<tr><td>Discount</td><td class="n">-${money(e.discount)}</td></tr>` : ''}
         <tfoot><tr><td>Gross profit</td><td class="n" style="color:var(--ok)">${money(x.profit + t.adj - (e.discount || 0))}</td></tr></tfoot>
@@ -1503,10 +1635,15 @@ async function renderDocInner(e, type) {
   if (type === 'jobsheet') {
     body = `${scopeBlock}
       <div class="sec">Crew & schedule</div>
-      <table><tr><td>Crew</td><td class="n">${x.labor.crew} people</td></tr><tr><td>Estimated on-site time</td><td class="n">${x.siteHours} h${x.grindHours ? ` + ${x.grindHours} h grinding` : ''}</td></tr>
+      <table><tr><td>Crew</td><td class="n">${x.labor.crew} people${(x.crewMembers || []).length ? `: ${esc(x.crewMembers.map((w) => w.name).join(', '))}` : ''}</td></tr>
+      <tr><td>Estimated time on site</td><td class="n">${x.siteHours} h (+ ${x.travelHours} h travel)</td></tr>
+      <tr><td>Labor-hours</td><td class="n">${x.personHours} h</td></tr>
       <tr><td>Days</td><td class="n">${x.days}</td></tr>
       ${x.volumeYd ? `<tr><td>Debris</td><td class="n">≈ ${Math.round(x.volumeYd)} yd³, ${x.loads} load(s)</td></tr>` : ''}
       ${x.saltLbs ? `<tr><td>Salt per visit</td><td class="n">${x.saltLbs} lb</td></tr>` : ''}</table>
+      <div class="sec">Work plan</div>
+      <table><tr><th>Task</th><th class="n">Workers</th><th class="n">Hours</th></tr>${x.tasks.map((k) => `<tr><td>${esc(k.label)}${k.equipment?.length ? `<br><span class="small">${esc(k.equipment.join(', '))}</span>` : ''}</td><td class="n">${k.workers ?? ''}</td><td class="n">${k.hours}</td></tr>`).join('')}</table>
+      ${(x.notes || []).length ? `<ul>${x.notes.map((n) => `<li>${esc(n)}</li>`).join('')}</ul>` : ''}
       <div class="sec">Equipment to bring</div>
       <table><tr><th>Equipment</th><th class="n">Est. hours</th></tr>${x.equipment.map((q) => `<tr><td>☐ ${esc(q.label)}</td><td class="n">${q.hours}</td></tr>`).join('')}</table>
       <div class="sec">Materials</div><table>${x.materials.map((mm) => `<tr><td>☐ ${esc(mm.label)}</td><td class="n">${mm.qty} ${esc(mm.unit)}</td></tr>`).join('')}</table>
@@ -1583,7 +1720,13 @@ async function viewDoc(id, type) {
   if (ds) ds.onclick = () => openSend(e, () => persist(e));
 }
 
-// ---------------------------------------------------------------- price book
+// ---------------------------------------------------------------- business setup pages
+
+function pageCtx() {
+  return { app, S, $, $$, esc, toast, money, setPath, getPath, saveCompany, savePricebook, setLeaving: (fn) => { leaving = fn; } };
+}
+
+// ---------------------------------------------------------------- price book (legacy view, replaced by Pricing Settings)
 
 function viewPricebook() {
   const pb = S.pricebook;
@@ -1641,7 +1784,13 @@ function viewSettings() {
   const tog = (label, k) => `<label class="chip"><input type="checkbox" data-s="${k}" ${getPath(st, k) ? 'checked' : ''}>${label}</label>`;
   app.innerHTML = `
     <h1>Settings</h1>
-    <div class="grid g2 cols" style="align-items:start;margin-top:.75rem">
+    <div class="card setup-links" style="margin-top:.75rem"><h2>🏢 Business setup</h2>
+      <div class="actions">
+        <a class="btn" href="#/resources">👷 My Resources<br><span class="tiny muted">Workers & equipment</span></a>
+        <a class="btn" href="#/rates">⏱ Production Rates<br><span class="tiny muted">Rates, multipliers, learning</span></a>
+        <a class="btn" href="#/pricebook">💲 Pricing Settings<br><span class="tiny muted">Costs, disposal, profit</span></a>
+      </div></div>
+    <div class="grid g2 cols" style="align-items:start">
       <div>
         <div class="card"><h2>✨ Automatic photo analysis</h2>
           <label class="engine"><input type="radio" name="engine" data-s="ai.engine" value="local" ${st.ai.engine !== 'cloud' ? 'checked' : ''}>

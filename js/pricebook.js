@@ -3,17 +3,23 @@
 
 export const DEFAULT_PRICEBOOK = {
   labor: {
-    wage: 26,            // $/hr average crew wage
-    burdenPct: 30,       // payroll tax, workers comp, insurance on top of wage
-    emergencyMult: 1.5,  // overtime / storm-call multiplier on labor
+    wage: 26,            // standard hourly labor cost: used when no workers are listed in My Resources
+    overtime: 39,        // overtime hourly cost for that standard worker
+    burdenPct: 30,       // payroll tax, workers comp, insurance on top of every worker's pay
+    minCharge: 0,        // minimum labor charge per job
+    emergencyMult: 1.5,  // legacy (overtime now comes from each worker's overtime rate)
   },
+  // equipment not set up in My Resources uses these, plus the rental rates below
+  equipmentDefaults: { hourly: 25, fuel: 6, maintenance: 5, mobilization: 0 },
+  disposal: { loadYards: 12, brush: 45, logs: 65, leaves: 40, stumps: 50, snow: 60, debris: 85 },
+  profit: { minProfit: 75, minProfitSnow: 15, urgentPct: 25, weekendPct: 15, holidayPct: 25, stormPct: 20, commercialPct: 10, residentialPct: 0 },
   crew: { tree: 3, snow: 1 },
   overheadPct: 15,       // shop, office, vehicles, admin
   targetMarginPct: 35,   // net profit target on the selling price
   taxPct: 0,
   minJobTree: 250,
   minJobSnow: 45,
-  travel: { perMile: 2.5, freeMiles: 15 },
+  travel: { perMile: 2.5, freeMiles: 15, minCharge: 0, speedMph: 35, loadTime: 0.25 },
   depositPct: 25,
   validDays: 30,
   roundTo: 5,

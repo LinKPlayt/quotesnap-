@@ -1,11 +1,11 @@
 // Offline-first app shell. Bump VERSION when app files change.
-const VERSION = 'quotesnap-v4';
+const VERSION = 'quotesnap-v5';
 // On-device AI files (model, labels, runtime). Kept across app updates: their URLs are
 // versioned (model ?v=<sha>, runtime folder name), so a new version gets a new entry and the
 // AI worker deletes old ones. Shared with js/localai/worker.js.
 const AI_CACHE = 'quotesnap-ai-v1';
 const ORT = 'js/vendor/ort-1.30.0/';
-const SHELL = ['./', 'index.html', 'css/styles.css', 'js/app.js', 'js/engine.js', 'js/pricebook.js', 'js/store.js', 'js/ai.js', 'js/geo.js', 'js/pdf.js',
+const SHELL = ['./', 'index.html', 'css/styles.css', 'js/app.js', 'js/engine.js', 'js/pricebook.js', 'js/store.js', 'js/ai.js', 'js/geo.js', 'js/pdf.js', 'js/company.js', 'js/planner.js', 'js/learning.js', 'js/views-company.js',
   'js/localai/manager.js', 'js/localai/worker.js', 'js/localai/interpret.js',
   ORT + 'ort.webgpu.min.mjs', ORT + 'ort-wasm-simd-threaded.asyncify.mjs', ORT + 'ort.wasm.min.mjs', ORT + 'ort-wasm-simd-threaded.mjs',
   'js/vendor/jspdf.umd.min.js', 'js/vendor/html2canvas.min.js', 'icons/icon.svg', 'manifest.webmanifest'];
