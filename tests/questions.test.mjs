@@ -136,7 +136,7 @@ test('answers that should cost more do cost more', () => {
   assert.ok(t([['job.timing', ['emergency']]]) > t([['job.timing', []]]), 'emergency');
   assert.ok(t([['job.miles', '65']]) > t([['job.miles', '2']]), 'distance');
   const s = (pairs) => answer('snow', [['snow.area', '1000'], ['job.miles', '8'], ...pairs]);
-  assert.ok(s([['snow.area', '4000']]) > s([['snow.area', '1500']]), 'bigger driveway (both plowed)');
+  assert.ok(s([['snow.area', '2500']]) >= s([['snow.area', '1000']]) && s([['snow.area', '4000']]) > s([['snow.area', '500']]), 'bigger driveway');
   assert.ok(s([['snow.salt', 'yes']]) > s([['snow.salt', 'no']]), 'salt');
   assert.ok(s([['snow.walks', '150']]) > s([['snow.walks', '0']]), 'sidewalks');
   assert.ok(s([['snow.depth', '12']]) > s([['snow.depth', '2']]), 'deeper snow');

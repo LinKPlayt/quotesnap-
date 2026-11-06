@@ -160,7 +160,7 @@ test('equipment with a typo cost per hour is capped and explained', () => {
   assert.ok(e.fuelCost < 1e6);
 });
 
-test('machine jobs still rent climbing gear for the small trees that get climbed', () => {
+test('machine jobs with no climbing gear of their own rent it for the rigging', () => {
   const c = co((x) => { x.equipment = x.equipment.filter((q) => q.type !== 'climbing_gear'); });
   const e = calc(tree({ method: 'lift' }, [{ ...newTree(), heightFt: 60 }, { ...newTree(), heightFt: 15, qty: 6 }]), PB, { company: c });
   assert.ok(e.equipment.some((q) => q.key === 'climbing_gear' && !q.owned));

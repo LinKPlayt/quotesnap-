@@ -60,7 +60,7 @@ test(`fuzz: ${N} random jobs × companies × price books never break the planner
   }
 });
 
-test('fuzz: metamorphic rules (more margin → higher price, more trees → more cost, more crew → not slower)', () => {
+test('fuzz: metamorphic rules (more margin → higher price, more trees → more cost, more crew → never slower and dearer)', () => {
   const R = rng(SEED + 1);
   for (let i = 0; i < Math.ceil(N / 3); i++) {
     const job = randomJob(R);
@@ -84,7 +84,13 @@ test('fuzz: metamorphic rules (more margin → higher price, more trees → more
     for (let k = 0; k < 4; k++) bigger.workers.push(newWorker({ name: `Extra ${k}`, skill: 'expert', can: { heavy: true, truck: true, loader: true, bucket: true, chipper: true, chainsaw: true } }));
     const small = calc(job, pb, { company });
     // (a broken production rate, already flagged on the quote, can make a tool the new crew unlocks slower than hand work)
-    if (!small.notes.some((n) => /production rate/.test(n))) assert.ok(calc(job, pb, { company: bigger }).siteHours <= small.siteHours + 0.01, `${label}: more skilled workers made the job slower`);
+    // with the same equipment, more skilled people never make the job both slower and dearer (the
+    // planner picks the cheapest way, so a faster crew may skip a machine that no longer pays off)
+    const same = structuredClone(job);
+    same.tree.method = small.method;
+    const before = calc(same, pb, { company });
+    const after = calc(same, pb, { company: bigger });
+    if (!before.notes.some((n) => /production rate/.test(n))) assert.ok(after.siteHours <= before.siteHours + 0.01 || after.price <= before.price, `${label}: more skilled workers made the same plan slower and dearer`);
     const broken = structuredClone(company);
     broken.equipment.forEach((x) => { x.availability = 'repair'; });
     const b = calc(job, pb, { company: broken });

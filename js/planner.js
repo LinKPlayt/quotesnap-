@@ -216,10 +216,16 @@ export function recommendMethod(tree) {
     reasons.push(`${METHOD_LABELS[tree.method]} selected by estimator.`);
     return { method: tree.method, reasons };
   }
-  const tallest = Math.max(0, ...tree.trees.filter((t) => t.work !== 'stump').map((t) => +t.heightFt || 0));
+  // only removals and trims use a machine (cabling is installed by climbing)
+  const tallest = Math.max(0, ...tree.trees.filter((t) => t.work === 'remove' || t.work === 'trim').map((t) => +t.heightFt || 0));
   const hz = tree.hazards || {};
-  if (tallest === 0) return { method: 'climb', reasons };
-  if (tallest > 75 || (hz.overHouse && hz.dead) || (tree.access === 'tight' && hz.overHouse && tallest > 50)) {
+  if (tallest === 0) {
+    if (tree.trees.some((t) => t.work === 'cable')) reasons.push('Cabling is installed by climbing.');
+    return { method: 'climb', reasons };
+  }
+  // a dead tree over a house needs a crane only when a bucket truck can't reach it and it's big
+  const deadOverHouse = hz.overHouse && hz.dead && tallest >= 40 && (tree.access === 'backyard' || tree.access === 'tight');
+  if (tallest > 75 || deadOverHouse || (tree.access === 'tight' && hz.overHouse && tallest > 50)) {
     reasons.push(tallest > 75 ? 'Tree over 75 ft: crane is fastest and safest.' : 'Dead tree over a structure: crane avoids climbing compromised wood.');
     return { method: 'crane', reasons };
   }
@@ -228,11 +234,12 @@ export function recommendMethod(tree) {
     return { method: 'climb', reasons };
   }
   if (tree.access === 'backyard') {
+    if (tallest < 25) { reasons.push('Small tree: ground work and climbing only.'); return { method: 'climb', reasons }; }
     reasons.push('Backyard gate access: tracked spider lift fits through a 36" gate and protects the lawn.');
-    return { method: tallest > 25 ? 'lift' : 'climb', reasons };
+    return { method: 'lift', reasons };
   }
   if (tallest >= 25) {
-    reasons.push('Truck can reach the tree: bucket truck is faster and safer than climbing.');
+    reasons.push(hz.dead ? 'Dead wood: a bucket truck is safer than climbing it.' : 'Truck can reach the tree: bucket truck is faster and safer than climbing.');
     return { method: 'bucket', reasons };
   }
   reasons.push('Small tree: ground work and climbing only.');
@@ -275,7 +282,60 @@ function price(division, pb, costs, job, opts = {}, extraPct = 0) {
 
 // ---------- tree jobs ----------
 
+// Auto equipment = the lowest-cost SAFE way to do the job, owned or rented. Safety rules only ever
+// take options away as trees get bigger or more dangerous (and better access only adds options), so a
+// bigger or harder job can never come out cheaper than a smaller, easier one.
+const METHOD_WHY = {
+  climb: 'Climbing and rigging: the lowest-cost safe way to do this job.',
+  bucket: 'Bucket truck: faster than climbing and the lowest-cost safe way to do this job.',
+  lift: 'Tracked spider lift: fits through a gate, protects the lawn, and is the lowest-cost safe way to do this job.',
+  crane: 'Crane: saves enough crew time to be the lowest-cost safe way to do this job.',
+};
 export function calcTree(job, pb = DEFAULT_PRICEBOOK, opts = {}) {
+  // the same cleaned-up job the planner sees (typos and broken numbers already fixed)
+  const t = cleanTreeJob(job, { ...job.tree, ...(opts.override || {}) }, []).tree;
+  if (t.method !== 'auto') return bestLoaders(job, pb, opts);
+  const rule = recommendMethod(t);
+  const hz = t.hazards || {};
+  const machineWork = t.trees.filter((x) => x.work === 'remove' || x.work === 'trim');
+  const tallest = Math.max(0, ...machineWork.map((x) => x.heightFt));
+  let cands;
+  if (!machineWork.length) cands = ['climb']; // stumps and cabling only
+  else if (rule.method === 'crane') cands = ['crane']; // over 75 ft, or dead over a house: safety first
+  else {
+    // worse access only removes options: a bucket truck needs the driveway, a spider lift a gate
+    cands = t.access === 'tight' ? ['climb', 'crane'] : t.access === 'backyard' ? ['climb', 'lift', 'crane'] : ['climb', 'bucket', 'lift', 'crane'];
+    // dead wood 25 ft and up is never climbed: a machine, or a crane when nothing else gets in
+    if (tallest >= 25 && hz.dead) cands = cands.filter((m) => m !== 'climb');
+  }
+  let best = null;
+  const skipped = [];
+  for (const m of cands) {
+    const e = bestLoaders(job, pb, { ...opts, override: { ...(opts.override || {}), method: m }, autoPick: true });
+    // that machine turned out unusable (no operator): say why, and use the other options
+    if (e.method !== m) { skipped.push(...e.notes.filter((n) => /^Planned as climbing because/.test(n)).map((n) => n.replace('Planned as climbing because', `${METHOD_LABELS[m]} not used because`))); continue; }
+    // cheapest wins; on a tie, the usual choice for this tree, else the faster one
+    const better = !best || e.price < best.price || (e.price === best.price && best.method !== rule.method && (m === rule.method || e.elapsedHours < best.elapsedHours));
+    if (better) best = e;
+  }
+  if (!best) best = bestLoaders(job, pb, opts);
+  best.reasons = [best.method === rule.method && rule.reasons.length ? rule.reasons[0] : METHOD_WHY[best.method], ...best.reasons];
+  best.config = { ...best.config, method: 'auto' };
+  best.notes = [...new Set([...skipped, ...best.notes])];
+  return best;
+}
+
+// One loader, or more when the time they save is worth the trip to bring them.
+function bestLoaders(job, pb, opts) {
+  let best = planTree(job, pb, opts);
+  for (let k = 2; k <= (best.maxLoaders || 1); k++) {
+    const e = planTree(job, pb, { ...opts, loaderCap: k });
+    if (e.price < best.price) best = e;
+  }
+  return best;
+}
+
+function planTree(job, pb, opts) {
   const company = companyOr(opts.company);
   const cleanNotes = [];
   ({ job, tree: opts._tree } = cleanTreeJob(job, { ...job.tree, ...(opts.override || {}) }, cleanNotes));
@@ -303,6 +363,7 @@ export function calcTree(job, pb = DEFAULT_PRICEBOOK, opts = {}) {
     else { method = 'climb'; notes.push(`Planned as climbing because ${why}.`); }
   }
   if (method === 'lift' && !of('spider_lift').length) { methodRental = true; notes.push('Spider lift priced as a rental: none in My Resources.'); }
+  if (opts.autoPick) reasons.splice(0, reasons.length);
   if (method === 'crane' && !of('crane').length) { methodRental = true; notes.push('Crane priced as a rental with operator: none in My Resources.'); }
 
   // --- quantities ---
@@ -322,20 +383,22 @@ export function calcTree(job, pb = DEFAULT_PRICEBOOK, opts = {}) {
     const h = t.heightFt;
     const d = +t.dbhIn > 0 ? +t.dbhIn : estimateDbh(h || 20, t.species);
     const sf = speciesFactor(t.species);
-    const size = (h / 22 + d / 16) / REF_SIZE;
+    const lin = (h / 22 + d / 16) / REF_SIZE;
+    // small trees come down in a few pieces, so their cutting time drops faster than their size
+    const size = lin < 1 ? Math.pow(lin, 1.5) : lin;
     const vol = (h * d) / 60; // cubic yards of wood + brush in a removed tree
     let each = 0;
     if (t.work === 'remove') {
       const r = R('tree_removal');
       // a bucket truck / lift / crane only speeds up trees tall enough to need one
-      each = (r.baseTime + size / r.rate) * sf * (h >= 25 ? methodF : 1);
+      each = (r.baseTime + size / r.rate) * sf * methodF;
       brush += vol * 0.4 * qty;
       wood += vol * 0.6 * qty;
       removalCount += qty;
       if (tree.stumps) for (let i = 0; i < qty; i++) stumps.push(d);
     } else if (t.work === 'trim') {
       const r = R('tree_trim');
-      each = (r.baseTime + size / r.rate) * sf * trimF * (h >= 25 ? Math.max(0.8, methodF) : 1);
+      each = (r.baseTime + size / r.rate) * sf * trimF * Math.max(0.8, methodF);
       brush += vol * 0.25 * trimF * qty;
     } else if (t.work === 'cable') {
       const r = R('cabling');
@@ -345,21 +408,30 @@ export function calcTree(job, pb = DEFAULT_PRICEBOOK, opts = {}) {
       for (let i = 0; i < qty; i++) stumps.push(d);
     }
     cutHours += each * qty;
-    if ((t.work === 'remove' || t.work === 'trim') && h >= 25) machineHours += each * qty;
+    if (t.work === 'remove' || t.work === 'trim') machineHours += each * qty;
     treeLines.push({ ...t, dbhIn: d, qty, hours: r2(each * qty) });
   }
   const debris = tree.debris || 'haul';
   const cuttingWork = cutHours > 0;
 
   // --- crew ---
-  const rec = Math.max(cuttingWork ? R('tree_removal').recCrew : 1, 0) + (cuttingWork && (method === 'crane' || hz.powerLines || hz.overHouse) ? 1 : 0);
-  const minCrew = cuttingWork ? R('tree_removal').minCrew : 1;
+  const extraHand = cuttingWork && (method === 'crane' || hz.powerLines || hz.overHouse);
+  // a small, simple job (about 2 hours of cutting or less) is done by the minimum safe crew
+  const small = cuttingWork && !extraHand && cutHours <= 2;
+  // the crew is the largest any task in the job needs (cabling alone is a 2-person job)
+  const kinds = [removalCount && 'tree_removal', tree.trees.some((t) => t.work === 'trim') && 'tree_trim', tree.trees.some((t) => t.work === 'cable') && 'cabling'].filter(Boolean).map(R);
+  const main = kinds[0] || R('tree_removal');
+  const rec = Math.max(cuttingWork ? Math.max(...kinds.map((k) => (small ? k.minCrew : k.recCrew))) : 1, 0) + (extraHand ? 1 : 0);
+  const minCrew = cuttingWork ? Math.max(...kinds.map((k) => k.minCrew)) : 1;
   const caps = [];
   if (cuttingWork) caps.push('chainsaw');
   if (method === 'bucket' && !methodRental) caps.push('bucket');
   const chipping = debris !== 'leave' && brush > 0;
   if (chipping && of('chipper').length) caps.push('chipper');
-  const loaders = [...of('skid_steer'), ...of('compact_loader'), ...of('loader'), ...of('grapple')].filter((u) => u.type !== 'loader' || tree.access !== 'tight');
+  // through a backyard gate only compact machines fit; with no access, nothing does
+  const loaders = tree.access === 'tight' ? []
+    : tree.access === 'backyard' ? [...of('skid_steer'), ...of('compact_loader')]
+      : [...of('skid_steer'), ...of('compact_loader'), ...of('loader'), ...of('grapple')];
   const loadWood = debris === 'haul' && wood > 0;
   if (loadWood && loaders.length && tree.access !== 'tight') caps.push('loader');
   const hauling = debris !== 'leave' && (brush > 0 || wood > 0);
@@ -413,13 +485,15 @@ export function calcTree(job, pb = DEFAULT_PRICEBOOK, opts = {}) {
     const gearHours = method === 'climb' ? cut : cut - machineCut + machineCut * 0.3;
     if (gear) { equipment.push(ownedLine(gear, gearHours, 'Cutting')); eq.push(gear.name); }
     // no owned gear: rent it for climbing jobs, and for the small trees a machine job still climbs
-    else if (method === 'climb' || cut - machineCut > 0.5) { equipment.push(rentalLine(pb, 'climb', 'climbing_gear', method === 'climb' ? gearHours : cut - machineCut, 'Cutting')); eq.push('Climbing gear'); }
-    addTask({ id: removalCount ? 'tree_removal' : 'tree_trim', label: `${removalCount ? 'Tree removal' : 'Tree work'}: ${label}`, qty: r2(cutHours), unit: 'reference-tree hours', workers: crewSize, hours: cut, equipment: eq, factor: r2(cut / Math.max(0.01, cutHours)) });
+    else if (gearHours > 0.5) { equipment.push(rentalLine(pb, 'climb', 'climbing_gear', gearHours, 'Cutting')); eq.push('Climbing gear'); }
+    addTask({ id: main.id, label: `${removalCount ? 'Tree removal' : 'Tree work'}: ${label}`, qty: r2(cutHours), unit: 'reference-tree hours', workers: crewSize, hours: cut, equipment: eq, factor: r2(cut / Math.max(0.01, cutHours)) });
   }
 
   // processing: chipping brush and loading wood can run side by side with 3+ people
   let chipT = 0;
   let logT = 0;
+  let maxLoaders = 1;
+  let extraLoaders = 0;
   const chipper = of('chipper')[0];
   if (chipping) {
     const rc = R('brush_chipping');
@@ -444,13 +518,16 @@ export function calcTree(job, pb = DEFAULT_PRICEBOOK, opts = {}) {
     const usable = tree.access === 'tight' ? [] : loaders.filter((u) => crew.some((w) => canRun(w, u)));
     if (usable.length) {
       const r = R('log_loading');
-      // aim to finish loading in about 4 hours; each extra machine needs its own operator
+      // aim to finish loading in about 4 hours; each extra machine needs its own operator and a
+      // trailer trip to bring it, so calcTree only brings one when it costs less overall
       const recL = Math.min(3, Math.max(1, Math.ceil(wood / (r.rate * 4))));
       const ops = crew.filter((w) => w.can?.loader || w.can?.heavy).length;
-      const used = usable.slice(0, Math.max(1, Math.min(recL, ops)));
+      maxLoaders = Math.max(1, Math.min(3, ops, usable.length));
+      const used = usable.slice(0, Math.max(1, Math.min(opts.loaderCap || 1, maxLoaders)));
+      extraLoaders = used.length - 1;
       logT = (wood / (r.rate * used.length)) * taskFactor(r, groups, skillMult);
       used.forEach((u) => equipment.push(ownedLine(u, logT, 'Log loading')));
-      if (used.length < recL) notes.push(`Log loading takes ${hrs(logT)} because only ${plural(used.length, 'loader is', 'loaders are')} available${usable.length > used.length ? ' with an operator' : ''} (${recL} recommended for ${Math.round(wood)} yd³ of wood).`);
+      if (maxLoaders < recL && used.length === maxLoaders) notes.push(`Log loading takes ${hrs(logT)} because only ${plural(used.length, 'loader is', 'loaders are')} available${usable.length > used.length ? ' with an operator' : ''} (${recL} recommended for ${Math.round(wood)} yd³ of wood).`);
       addTask({ id: 'log_loading', label: 'Loading logs', qty: r2(wood), unit: 'yd³ wood', rate: r.rate * used.length, workers: used.length, hours: logT, equipment: used.map((u) => u.name) });
     } else {
       const r = R('log_hand');
@@ -478,11 +555,19 @@ export function calcTree(job, pb = DEFAULT_PRICEBOOK, opts = {}) {
   let loads = 0;
   if (hauling) {
     const chipped = tasks.some((t) => t.id === 'brush_chipping');
-    const brushLoads = brush > 0 ? Math.ceil((brush * (chipped ? 0.3 : 0.6)) / loadYd) : 0;
-    const logLoads = debris === 'haul' && wood > 0 ? Math.ceil(wood / loadYd) : 0;
-    if (brushLoads) disposal.push({ label: chipped ? 'Chips / brush disposal' : 'Brush disposal', qty: brushLoads, unit: 'load', rate: D.brush, cost: brushLoads * D.brush });
-    if (logLoads) disposal.push({ label: 'Log disposal', qty: logLoads, unit: 'load', rate: D.logs, cost: logLoads * D.logs });
-    loads = brushLoads + logLoads;
+    const brushYd = brush > 0 ? brush * (chipped ? 0.3 : 0.6) : 0;
+    const woodYd = debris === 'haul' && wood > 0 ? wood : 0;
+    if (brushYd && woodYd && brushYd + woodYd <= loadYd) {
+      // a small job: chips and logs go out in one truck, charged at the log rate
+      disposal.push({ label: `${chipped ? 'Chips' : 'Brush'} & log disposal (one load)`, qty: 1, unit: 'load', rate: D.logs, cost: D.logs });
+      loads = 1;
+    } else {
+      const brushLoads = brushYd ? Math.ceil(brushYd / loadYd) : 0;
+      const logLoads = woodYd ? Math.ceil(woodYd / loadYd) : 0;
+      if (brushLoads) disposal.push({ label: chipped ? 'Chips / brush disposal' : 'Brush disposal', qty: brushLoads, unit: 'load', rate: D.brush, cost: brushLoads * D.brush });
+      if (logLoads) disposal.push({ label: 'Log disposal', qty: logLoads, unit: 'load', rate: D.logs, cost: logLoads * D.logs });
+      loads = brushLoads + logLoads;
+    }
   }
   // stump grinding (one operator; overlaps cleanup when there are 2+ people)
   let grindT = 0;
@@ -505,21 +590,40 @@ export function calcTree(job, pb = DEFAULT_PRICEBOOK, opts = {}) {
   }
 
   let haulT = 0;
+  let haulTrucks = []; // owned trucks hauling, with their drivers
   if (loads) {
     const r = R('hauling');
     // enough trucks to finish hauling while the crew is still processing and cleaning up
     const window = Math.max(0.5, processing + cleanT);
-    const recTrucks = Math.min(3, Math.max(1, Math.ceil(loads / (r.rate * window))));
+    // trips during the job = loads − trucks (each truck's last load leaves with the crew)
+    const recTrucks = Math.min(3, Math.max(1, Math.ceil(loads / (1 + r.rate * window))));
     const drivers = crew.filter((w) => w.can?.truck).length;
-    const trucks = of('dump_truck').slice(0, Math.max(0, Math.min(recTrucks, drivers || 0)));
+    const canSend = Math.max(0, Math.min(recTrucks, drivers || 0, of('dump_truck').length));
+    // another truck only when it costs less than the crew waiting for the last trips
+    const hf = taskFactor(r, groups, skillMult);
+    const lastRunT = 0.5 / Math.max(0.1, r.rate);
+    const crewRate = crew.reduce((t, w) => t + laborRate(w, pb, overtime), 0);
+    const driverRate = crewRate / Math.max(1, crew.length);
+    let nT = Math.min(1, canSend);
+    let bestCost = Infinity;
+    for (let n = 1; n <= canSend; n++) {
+      const h = (loads / (n * r.rate)) * hf;
+      const wait = Math.max(0, h * (Math.max(0, loads - n) / loads) - window);
+      const extra = of('dump_truck').slice(1, n).reduce((t, u) => t + (h + lastRunT) * (u.hourly + u.maintenance + u.fuel), 0);
+      const cost = wait * crewRate + extra + n * lastRunT * driverRate;
+      if (cost < bestCost - 0.01) { bestCost = cost; nT = n; }
+    }
+    const trucks = of('dump_truck').slice(0, nT);
     const eq = [];
     if (trucks.length) {
-      haulT = (loads / (trucks.length * r.rate)) * taskFactor(r, groups, skillMult);
-      if (trucks.length < recTrucks) {
+      haulT = (loads / (trucks.length * r.rate)) * hf;
+      if (canSend < recTrucks && trucks.length === canSend) {
         const why = of('dump_truck').length < recTrucks ? `only ${plural(of('dump_truck').length, 'dump truck is', 'dump trucks are')} available` : `only ${plural(drivers, 'person on the crew can', 'people on the crew can')} drive a truck`;
         notes.push(`Hauling takes longer because ${why} (${recTrucks} recommended for ${plural(loads, 'load')}).`);
       }
-      trucks.forEach((u, i) => { const h = i === 0 ? null : haulT; eq.push(u.name); if (h) equipment.push(ownedLine(u, h, 'Hauling')); });
+      haulTrucks = trucks;
+      const lastRun = 0.5 / Math.max(0.1, r.rate);
+      trucks.forEach((u, i) => { eq.push(u.name); if (i > 0) equipment.push(ownedLine(u, haulT + lastRun, 'Hauling')); });
     } else {
       haulT = loads / r.rate;
       equipment.push(rentalLine(pb, 'dump', 'dump_truck', haulT, 'Hauling'));
@@ -532,7 +636,12 @@ export function calcTree(job, pb = DEFAULT_PRICEBOOK, opts = {}) {
   // elapsed time on site
   const grindSeq = crewSize >= 2 && cuttingWork ? Math.max(0, grindT - cleanT) : grindT;
   const onSiteNoHaul = setup + cut + processing + fireT + cleanT + grindSeq;
-  const haulExtra = Math.max(0, haulT - (processing + cleanT));
+  const nTrucks = Math.max(1, tasks.find((t) => t.id === 'hauling')?.workers || 1);
+  const tripsOnSite = Math.max(0, loads - nTrucks);
+  const haulOnSite = loads ? haulT * (tripsOnSite / loads) : 0;
+  const haulExtra = Math.max(0, haulOnSite - (processing + cleanT));
+  // the final dump run: a detour on the way home for each loaded truck and its driver
+  const dumpRun = loads ? (0.5 / Math.max(0.1, R('hauling').rate)) : 0;
   if (haulExtra > 0.05) notes.push(`Crew waits about ${hrs(haulExtra)} for the last loads to be hauled.`);
   const onSite = onSiteNoHaul + haulExtra;
   const days = Math.max(1, Math.ceil(onSite / 8));
@@ -541,13 +650,14 @@ export function calcTree(job, pb = DEFAULT_PRICEBOOK, opts = {}) {
 
   // the first dump truck tows the chipper and stays with the crew all day
   const lead = of('dump_truck')[0];
-  if (lead && (chipping || loads) && crew.some((w) => w.can?.truck)) equipment.push(ownedLine(lead, onSite, 'Crew truck / chipper tow'));
+  if (lead && (chipping || loads) && crew.some((w) => w.can?.truck)) equipment.push(ownedLine(lead, onSite + (haulTrucks.includes(lead) ? dumpRun : 0), 'Crew truck / chipper tow'));
 
   // --- costs ---
   const laborHours = crewSize * (onSite + travelT);
   const rates = crew.map((w) => laborRate(w, pb, overtime));
   const avgRate = rates.reduce((a, b) => a + b, 0) / rates.length;
-  let laborCost = rates.reduce((s, r) => s + r * onSite, 0);
+  // drivers' time for the final dump run on the way home
+  let laborCost = rates.reduce((s, r) => s + r * onSite, 0) + avgRate * dumpRun * haulTrucks.length;
   if (laborCost < pb.labor.minCharge) laborCost = pb.labor.minCharge;
   const equipmentCost = equipment.reduce((s, e) => s + e.cost, 0);
   const fuelCost = equipment.reduce((s, e) => s + e.fuel, 0);
@@ -556,6 +666,7 @@ export function calcTree(job, pb = DEFAULT_PRICEBOOK, opts = {}) {
   const travelLabor = rates.reduce((s, r) => s + r * travelT, 0);
   const travel = Math.max(pb.travel.minCharge || 0, vehicle + travelLabor);
   const materials = [];
+  if (extraLoaders) materials.push({ label: `Bring ${plural(extraLoaders, 'extra loader')} (trailer trip)`, qty: extraLoaders, unit: 'trip', cost: r2(extraLoaders * travelTime(job, pb, groups) * (avgRate + (+pb.equipmentDefaults.hourly || 0))) });
   if (cableKits) materials.push({ label: 'Cabling & bracing hardware', qty: cableKits, unit: 'kit', cost: cableKits * pb.materials.cablingKit });
   if (tree.restore && stumps.length) materials.push({ label: 'Topsoil, seed & straw', qty: stumps.length, unit: 'stump', cost: stumps.length * pb.materials.restoreKit });
   if (job.permit) materials.push({ label: 'Permit / municipal fee', qty: 1, unit: 'ea', cost: pb.materials.permitFee });
@@ -575,6 +686,8 @@ export function calcTree(job, pb = DEFAULT_PRICEBOOK, opts = {}) {
   const required = summarizeNeeds({ crew: { rec, used: crewSize, have: assumed ? 0 : activeWorkers(company).length }, equipment, units });
   return {
     division: 'tree',
+    autoRental: methodRental && !explicit,
+    maxLoaders,
     method,
     methodLabel: METHOD_LABELS[method] + (methodRental ? ' (rental)' : ''),
     reasons: [...reasons, ...missing.map((c) => `No active worker can operate: ${c}.`)],
@@ -620,7 +733,52 @@ export function calcTree(job, pb = DEFAULT_PRICEBOOK, opts = {}) {
 
 const PLOW_CARRIERS = ['pickup', 'dump_truck', 'utv', 'atv'];
 
+// Auto equipment = the lowest-cost way this company can do the visit. Each way's price grows with
+// the area, depth and walks, so the cheapest of them does too: a bigger lot is never cheaper.
+const SNOW_LABELS = { plow: 'Plow truck', skid: 'Skid steer with pusher', loader: 'Loader with pusher', blower: 'Snow blower', shovel: 'Shovels' };
 export function calcSnow(job, pb = DEFAULT_PRICEBOOK, opts = {}) {
+  const s = cleanSnow({ ...job.snow, ...(opts.override || {}) });
+  // hauling: try 1–4 trucks (as many as help); the cheapest plan wins
+  const truckCaps = s.haul && +s.areaSqft > 0 ? [1, 2, 3, 4] : [undefined];
+  // hand work: also try sending 1–2 extra helpers, kept only when the visit costs less with them
+  const helperCounts = +s.walkLf > 0 || +s.roofSqft > 0 || ['auto', 'shovel'].includes(s.method) ? [0, 1, 2] : [0];
+  const pushers = (c) => fleet(companyOr(c)).filter((u) => (PLOW_CARRIERS.includes(u.type) && u.attachments.includes('plow')) || ['skid_steer', 'compact_loader', 'loader'].includes(u.type)).length;
+  const cheapest = (o) => {
+    const m = cleanSnow({ ...job.snow, ...(o.override || {}) }).method;
+    const extras = ['plow', 'skid', 'loader'].includes(m) && +s.areaSqft > 0 && pushers(o.company) > 1 ? [false, true] : [false];
+    let best = null;
+    for (const truckCap of truckCaps) {
+      for (const helpers of helperCounts) {
+        for (const extraUnit of extras) {
+          const e = planSnow(job, pb, { ...o, truckCap, helpers, extraUnit });
+          if (!best || e.price < best.price || (e.price === best.price && e.elapsedHours < best.elapsedHours)) best = e;
+        }
+      }
+    }
+    return best;
+  };
+  if (s.method !== 'auto' || !(+s.areaSqft > 0)) return cheapest({ ...opts, autoPick: s.method === 'auto' });
+  const company = companyOr(opts.company);
+  const units = fleet(company);
+  const has = (pred) => units.some(pred);
+  const owned = [
+    has((u) => PLOW_CARRIERS.includes(u.type) && u.attachments.includes('plow')) && 'plow',
+    has((u) => u.type === 'skid_steer' || u.type === 'compact_loader') && 'skid',
+    has((u) => u.type === 'loader') && 'loader',
+    has((u) => u.type === 'walk_blower' || u.type === 'snow_blower') && 'blower',
+  ].filter(Boolean);
+  // nothing that pushes snow: shovels, or a rented machine when that is cheaper
+  const cands = owned.some((m) => m !== 'blower') ? [...owned, 'shovel'] : [...owned, 'shovel', 'plow', 'skid'];
+  let best = null;
+  for (const m of [...new Set(cands)]) {
+    const e = cheapest({ ...opts, override: { ...(opts.override || {}), method: m }, autoPick: true });
+    if (!best || e.price < best.price || (e.price === best.price && e.elapsedHours < best.elapsedHours)) best = e;
+  }
+  best.config = { ...best.config, method: 'auto' };
+  return best;
+}
+
+function planSnow(job, pb, opts) {
   const company = companyOr(opts.company);
   const s = cleanSnow({ ...job.snow, ...(opts.override || {}) });
   job = { ...job, miles: clampNum(job.miles, 'miles', 0) };
@@ -657,16 +815,20 @@ export function calcSnow(job, pb = DEFAULT_PRICEBOOK, opts = {}) {
   const kinds = { plow: { units: plowTrucks, rate: 'plow_truck', label: 'Plow truck' }, skid: { units: skids, rate: 'plow_skid', label: 'Skid steer with pusher' }, loader: { units: wheelLoaders, rate: 'plow_loader', label: 'Loader with pusher' } };
 
   let method = s.method;
-  if (!method || method === 'auto') {
-    if (area <= 0) method = 'shovel';
-    else if (area < 1500) method = blowers.length ? 'blower' : 'shovel';
-    else if (area < 15000) method = plowTrucks.length ? 'plow' : skids.length ? 'skid' : wheelLoaders.length ? 'loader' : 'plow';
-    else method = wheelLoaders.length ? 'loader' : skids.length ? 'skid' : plowTrucks.length ? 'plow' : 'skid';
-    reasons.push(area < 1500 ? 'Small area: snow blower or shovels.' : area < 15000 ? 'Driveway / small lot: a truck plow is fastest.' : 'Large lot: pushers stack snow fastest; extra plow trucks help on big lots.');
-  } else reasons.push(`${kinds[method]?.label || method} selected by estimator.`);
+  if (area <= 0) method = 'shovel'; // nothing to plow: walks, steps or a roof only
+  if (opts.autoPick) reasons.push(`${SNOW_LABELS[method] || method}: the lowest-cost way to clear this with your equipment.`);
+  else reasons.push(`${SNOW_LABELS[method] || method} selected by estimator.`);
 
   const free = [...workers].sort((a, b) => (SKILL_ORDER[a.skill] ?? 2) - (SKILL_ORDER[b.skill] ?? 2));
   const take = (pred) => { const i = free.findIndex(pred); return i >= 0 ? free.splice(i, 1)[0] : null; };
+  // hand work (shoveling, walks, roof) goes to the lowest-cost people first; machines get the most skilled
+  const handCost = (w) => laborRate(w, pb, overtime) * (M.skill[w.skill]?.value ?? 1);
+  const takeHand = () => {
+    if (!free.length) return null;
+    let i = 0;
+    free.forEach((w, k) => { if (handCost(w) < handCost(free[i])) i = k; });
+    return free.splice(i, 1)[0];
+  };
   const crew = [];
   const tasks = [];
   const equipment = [];
@@ -679,13 +841,16 @@ export function calcSnow(job, pb = DEFAULT_PRICEBOOK, opts = {}) {
   let plowT = 0;
   const plowOps = [];
   if (area > 0 && (method === 'plow' || method === 'skid' || method === 'loader')) {
-    const recUnits = s.property === 'commercial' ? Math.max(1, Math.ceil(acres / 1.5)) : 1;
-    // fastest units first: chosen kind, then other kinds for big lots
-    const order = [method, ...(area >= 15000 ? Object.keys(kinds).filter((k) => k !== method) : [])];
+    const recUnits = Math.max(1, Math.ceil(acres / 1.5)); // a home driveway is always one unit
+    // at least one unit per 1.5 acres (so a lot is clear in time); one more when that costs less
+    const wantUnits = recUnits + (opts.extraUnit ? 1 : 0);
+    // fastest units first: chosen kind, then other kinds when more than one unit goes
+    // an estimator's pick they don't own stays a rental at every size (no silent switch)
+    const order = [method, ...(wantUnits > 1 && kinds[method].units.length ? Object.keys(kinds).filter((k) => k !== method) : [])];
     const used = [];
     for (const k of order) {
       for (const u of kinds[k].units) {
-        if (used.length >= recUnits) break;
+        if (used.length >= wantUnits) break;
         const w = take((x) => canRun(x, u));
         if (!w) continue;
         used.push({ u, k, w });
@@ -696,7 +861,7 @@ export function calcSnow(job, pb = DEFAULT_PRICEBOOK, opts = {}) {
       const w = take(() => true) || workers[0];
       const rk = method === 'plow' ? 'plow' : 'skid';
       const r = R(kinds[method]?.rate || 'plow_skid');
-      plowT = (acres / r.rate) * depthF * taskFactor(r, groups, skillOf([w]));
+      plowT = (r.baseTime + (acres / r.rate) * depthF) * taskFactor(r, groups, skillOf([w]));
       equipment.push(rentalLine(pb, rk, method === 'plow' ? 'pickup' : 'skid_steer', plowT, 'Plowing'));
       plowOps.push(w);
       notes.push(kinds[method]?.units.length ? `No one available can operate the ${kinds[method].label.toLowerCase()}: priced as a rental.` : `No ${kinds[method]?.label.toLowerCase() || 'plow'} available in My Resources: priced as a rental.`);
@@ -704,8 +869,9 @@ export function calcSnow(job, pb = DEFAULT_PRICEBOOK, opts = {}) {
     } else {
       const totalRate = used.reduce((t, x) => t + R(kinds[x.k].rate).rate, 0);
       const f = taskFactor(R(kinds[used[0].k].rate), groups, skillOf(used.map((x) => x.w)));
-      plowT = (acres / totalRate) * depthF * f;
+      plowT = (R(kinds[used[0].k].rate).baseTime + (acres / totalRate) * depthF) * f;
       used.forEach((x) => { equipment.push(ownedLine(x.u, plowT, 'Plowing')); plowOps.push(x.w); });
+      if (opts.extraUnit && used.length > recUnits) notes.push('One more plow unit than usual: the visit finishes sooner and costs less overall.');
       if (used.length < recUnits) {
         const have = Object.values(kinds).reduce((t, k) => t + k.units.length, 0);
         notes.push(have < recUnits
@@ -718,8 +884,8 @@ export function calcSnow(job, pb = DEFAULT_PRICEBOOK, opts = {}) {
   } else if (area > 0) {
     const b = method === 'blower' ? blowers[0] : null;
     const r = R(b ? 'snow_blower' : 'shoveling');
-    const w = take(() => true) || workers[0];
-    plowT = (area / r.rate) * depthF * taskFactor(r, groups, skillOf([w]));
+    const w = takeHand() || workers[0];
+    plowT = (r.baseTime + (area / r.rate) * depthF) * taskFactor(r, groups, skillOf([w]));
     if (b) equipment.push(ownedLine(b, plowT, 'Snow blowing'));
     else if (method === 'blower') { equipment.push(rentalLine(pb, 'blower', 'walk_blower', plowT, 'Snow blowing')); notes.push('No snow blower in My Resources: priced as a rental.'); }
     plowOps.push(w);
@@ -727,30 +893,44 @@ export function calcSnow(job, pb = DEFAULT_PRICEBOOK, opts = {}) {
   }
   crew.push(...plowOps);
 
-  // sidewalks: other workers in parallel, or the plow operator afterwards
+  // Hand work (walks, roof, shoveling) is shared: whoever finishes their own part, a plow operator
+  // included, helps with what's left, so nobody is paid to stand around. machineT: how long each
+  // machine operator is busy; hand: person-hours of hand work; handCrew: people on hand work.
+  // hand work is counted at standard skill; each person then works at their own speed
+  const shovelArea = method === 'shovel' && area > 0;
+  const machineT = shovelArea ? [] : plowOps.map((w) => [w, plowT]);
+  let hand = shovelArea ? plowT / skillOf(plowOps) : 0;
+
+  // sidewalks: a sidewalk crew, or the plow operator afterwards
   let walkT = 0;
   let walkSeq = false;
   if (walk > 0) {
     const machine = units.find((u) => u.type === 'sidewalk_machine' || ((u.type === 'utv' || u.type === 'atv') && u.attachments.includes('plow')));
     const recW = Math.max(1, Math.ceil(walk / 600));
+    // short walks at a home: the operator does them after plowing, no second person needed
+    const solo = s.property !== 'commercial' && walk <= 300 && area > 0;
     let ws = [];
-    let mw = machine ? take((x) => canRun(x, machine)) : null;
-    if (!mw) for (let i = 0; i < recW; i++) { const w = take(() => true); if (w) ws.push(w); }
-    if (!mw && !ws.length) { walkSeq = true; ws = [plowOps[0] || workers[0]]; notes.push('No extra worker for sidewalks: the operator clears them after plowing, so the visit takes longer.'); }
+    let mw = machine && !solo ? take((x) => canRun(x, machine)) : null;
+    if (!mw && !solo) for (let i = 0; i < recW; i++) { const w = takeHand(); if (w) ws.push(w); }
+    if (!mw && !ws.length) { walkSeq = true; ws = [plowOps[0] || workers[0]]; if (!solo) notes.push('No extra worker for sidewalks: the operator clears them after plowing, so the visit takes longer.'); }
     else if (!mw && ws.length < recW) notes.push(`Sidewalks take longer because only ${plural(ws.length, 'worker is', 'workers are')} free for them (${recW} recommended).`);
     if (mw) {
       const r = R('sidewalk_machine');
       walkT = (walk / r.rate) * depthF * taskFactor(r, groups, skillOf([mw]));
       equipment.push(ownedLine(machine, walkT, 'Sidewalks'));
       crew.push(mw);
+      machineT.push([mw, walkT]);
       addTask({ id: 'sidewalk_machine', label: `Sidewalks ${walk} ft`, qty: walk, unit: 'linear ft', rate: r.rate, workers: 1, hours: walkT, equipment: [machine.name] });
     } else {
       const r = R('sidewalks');
-      walkT = (walk / (r.rate * ws.length)) * depthF * taskFactor(r, groups, skillOf(ws));
+      const work = (walk / r.rate) * depthF * taskFactor(r, groups, skillOf(ws));
+      hand += work / skillOf(ws);
+      walkT = work / ws.length;
+      // the blowers do all the walk work between them (a walker without one swaps in)
       const bl = blowers.filter((u) => u.type === 'walk_blower').slice(0, ws.length);
-      bl.forEach((u) => equipment.push(ownedLine(u, walkT, 'Sidewalks')));
+      bl.forEach((u) => equipment.push(ownedLine(u, work / bl.length, 'Sidewalks')));
       if (!walkSeq) crew.push(...ws);
-      addTask({ id: 'sidewalks', label: `Sidewalks ${walk} ft`, qty: walk, unit: 'linear ft', rate: r.rate, workers: ws.length, hours: walkT, equipment: bl.map((u) => u.name) });
+      addTask({ id: 'sidewalks', label: `Sidewalks ${walk} ft${walkSeq && plowT ? ' (after plowing)' : ''}`, qty: walk, unit: 'linear ft', rate: r.rate, workers: ws.length, hours: walkT, equipment: bl.map((u) => u.name) });
     }
   }
 
@@ -759,10 +939,12 @@ export function calcSnow(job, pb = DEFAULT_PRICEBOOK, opts = {}) {
   if (roof > 0) {
     const r = R('roof_snow');
     const ws = [];
-    for (let i = 0; i < r.recCrew; i++) { const w = take(() => true); if (w) ws.push(w); }
+    for (let i = 0; i < r.recCrew; i++) { const w = takeHand(); if (w) ws.push(w); }
     if (ws.length < r.minCrew) notes.push(`Roof work needs ${r.minCrew} people for safety; only ${ws.length} free.`);
     const n = Math.max(1, ws.length);
-    roofT = (roof / (r.rate * n)) * depthF * taskFactor(r, groups, skillOf(ws));
+    const work = (roof / r.rate) * depthF * taskFactor(r, groups, skillOf(ws));
+    hand += work / skillOf(ws);
+    roofT = work / n;
     crew.push(...ws);
     addTask({ id: 'roof_snow', label: `Roof snow ${roof.toLocaleString()} sq ft`, qty: roof, unit: 'sq ft', rate: r.rate, workers: n, hours: roofT, equipment: [] });
   }
@@ -794,32 +976,53 @@ export function calcSnow(job, pb = DEFAULT_PRICEBOOK, opts = {}) {
     const recTrucks = Math.max(1, Math.min(4, Math.ceil(loads / 4)));
     const recLoaders = Math.max(1, Math.ceil((recTrucks * tr.rate) / lr.rate));
     // operators: plow operators can switch to loading/hauling after plowing
-    const pool = [...free, ...plowOps];
+    // hauling comes after the shared work, so anyone already on the visit can drive or load
+    // (people already here first, then the lowest-cost people who can run the machine)
+    const pool = [...new Set([...crew, ...[...free].sort((a, b) => handCost(a) - handCost(b))])];
+    const truckLimit = opts.truckCap ?? recTrucks;
     const usedL = [];
     for (const u of loaderUnits) { if (usedL.length >= recLoaders) break; const i = pool.findIndex((w) => canRun(w, u)); if (i >= 0) usedL.push({ u, w: pool.splice(i, 1)[0] }); }
+    const loadersFound = usedL.length;
     const usedT = [];
-    for (const u of trucks) { if (usedT.length >= recTrucks) break; const i = pool.findIndex((w) => canRun(w, u)); if (i >= 0) usedT.push({ u, w: pool.splice(i, 1)[0] }); }
-    const truckCap = usedT.length * tr.rate;
-    const loaderCap = usedL.length * lr.rate;
+    for (const u of trucks) { if (usedT.length >= truckLimit) break; const i = pool.findIndex((w) => canRun(w, u)); if (i >= 0) usedT.push({ u, w: pool.splice(i, 1)[0] }); }
+    // a missing truck or loader is one rental unit; no idle machines: only as many trucks as the
+    // loaders can fill, and loaders as the trucks can take
+    const nL = Math.max(1, usedL.length);
+    const nTk = Math.max(1, usedT.length);
+    if (usedT.length > Math.ceil((nL * lr.rate) / tr.rate)) usedT.length = Math.ceil((nL * lr.rate) / tr.rate);
+    if (usedL.length > Math.ceil((nTk * tr.rate) / lr.rate)) usedL.length = Math.ceil((nTk * tr.rate) / lr.rate);
+    const truckCap = Math.max(1, usedT.length) * tr.rate;
+    const loaderCap = Math.max(1, usedL.length) * lr.rate;
+    haulT = loads / Math.min(truckCap, loaderCap);
     if (!usedT.length || !usedL.length) {
       notes.push(`Snow hauling needs ${!usedT.length ? 'a dump truck and driver' : ''}${!usedT.length && !usedL.length ? ' and ' : ''}${!usedL.length ? 'a loader and operator' : ''}: priced as rentals.`);
-      haulT = loads / Math.min(tr.rate, lr.rate);
       if (!usedT.length) equipment.push(rentalLine(pb, 'dump', 'dump_truck', haulT, 'Snow hauling'));
       if (!usedL.length) equipment.push(rentalLine(pb, 'skid', 'skid_steer', haulT, 'Snow hauling'));
-    } else {
-      haulT = loads / Math.min(truckCap, loaderCap);
-      if (usedL.length < recLoaders && loaderCap < truckCap) notes.push(`Estimated duration increased because only ${plural(usedL.length, 'loader is', 'loaders are')} available (${recLoaders} recommended).`);
-      if (usedT.length < recTrucks && truckCap <= loaderCap) notes.push(`Estimated duration increased because only ${plural(usedT.length, 'dump truck is', 'dump trucks are')} available (${recTrucks} recommended for ${plural(loads, 'load')}).`);
     }
+    if (loadersFound && loadersFound < recLoaders && loaderCap <= truckCap) notes.push(`Estimated duration increased because only ${plural(usedL.length, 'loader is', 'loaders are')} available (${recLoaders} recommended).`);
+    if (usedT.length && usedT.length < truckLimit && truckCap <= loaderCap) notes.push(`Estimated duration increased because only ${plural(usedT.length, 'dump truck is', 'dump trucks are')} available (${recTrucks} recommended for ${plural(loads, 'load')}).`);
     usedL.forEach((x) => { equipment.push(ownedLine(x.u, haulT, 'Snow loading')); if (!crew.includes(x.w)) crew.push(x.w); });
     usedT.forEach((x) => { equipment.push(ownedLine(x.u, haulT, 'Snow hauling')); if (!crew.includes(x.w)) crew.push(x.w); });
     disposal.push({ label: 'Snow hauling / dump fee', qty: loads, unit: 'load', rate: pb.disposal.snow, cost: loads * pb.disposal.snow });
     addTask({ id: 'snow_hauling', label: `Hauling snow off site (${plural(loads, 'load')})`, qty: loads, unit: 'load', rate: r2(Math.min(truckCap || tr.rate, loaderCap || lr.rate)), workers: usedT.length + usedL.length, hours: haulT, equipment: [...usedL, ...usedT].map((x) => x.u.name) });
   }
 
-  if (!crew.length) crew.push(workers[0]);
+  if (!crew.length) crew.push(takeHand() || workers[0]);
+  let helpersSent = 0;
+  for (const w of crew) { const i = free.indexOf(w); if (i >= 0) free.splice(i, 1); } // drivers and loaders are on the crew now
+  if (hand > 0) for (let i = 0; i < (opts.helpers || 0); i++) { const w = takeHand(); if (!w) break; crew.push(w); helpersSent++; }
+  if (helpersSent) notes.push(`${plural(helpersSent, 'extra helper is', 'extra helpers are')} sent: the visit finishes sooner and costs less overall.`);
   const crewSize = crew.length;
-  const onSite = setup + Math.max(plowT + (walkSeq ? walkT : 0), walkSeq ? 0 : walkT, roofT) + saltT + haulT;
+  // the shared phase ends when the machines are done and the hand work is split among the whole
+  // crew (truck drivers and loader operators too, until hauling starts)
+  // speed of each person on hand work (an expert does more per hour than a beginner)
+  const speed = (w) => 1 / (M.skill[w.skill]?.value ?? 1);
+  const busy = machineT.reduce((t, [w, h]) => t + speed(w) * h, 0);
+  const allSpeed = crew.reduce((t, w) => t + speed(w), 0) || 1;
+  const shared = Math.max(0, ...machineT.map(([, h]) => h), (hand + busy) / allSpeed);
+  const people = crewSize;
+  if (people > 1 && hand > 0 && shared < Math.max(walkT, roofT) - 0.05) notes.push('Everyone helps with the walks and roof once their own part is done.');
+  const onSite = setup + shared + saltT + haulT;
   const travelT = travelTime(job, pb, groups, true);
   addTask({ id: 'travel', label: 'Travel (route)', qty: +job.miles || 0, unit: 'miles', workers: crewSize, hours: travelT, equipment: [] });
 

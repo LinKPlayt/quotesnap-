@@ -368,13 +368,15 @@ export function buildOptions(job, pb = DEFAULT_PRICEBOOK, marginPct, company) {
   const events = +job.snow.events || pb.snow.eventsPerSeason;
   const perPush = calcSnow(job, pb, { ...opts, override: { salt: false } });
   const withSalt = calcSnow(job, pb, { ...opts, override: { salt: true } });
-  const seasonalTotal = roundUp(withSalt.price * events * (1 - pb.snow.seasonalDiscountPct / 100), 25);
+  // the season price follows the customer's salt answer (no salt asked for → none priced in)
+  const visit = job.snow.salt ? withSalt : perPush;
+  const seasonalTotal = roundUp(visit.price * events * (1 - pb.snow.seasonalDiscountPct / 100), 25);
   const seasonal = {
-    ...withSalt,
+    ...visit,
     price: seasonalTotal,
-    fullCost: r2(withSalt.fullCost * events),
-    profit: r2(seasonalTotal - withSalt.fullCost * events),
-    marginPct: r2(((seasonalTotal - withSalt.fullCost * events) / seasonalTotal) * 100),
+    fullCost: r2(visit.fullCost * events),
+    profit: r2(seasonalTotal - visit.fullCost * events),
+    marginPct: r2(((seasonalTotal - visit.fullCost * events) / seasonalTotal) * 100),
     seasonal: true,
     events,
     monthly: roundUp(seasonalTotal / pb.snow.seasonMonths, 1),
@@ -383,7 +385,7 @@ export function buildOptions(job, pb = DEFAULT_PRICEBOOK, marginPct, company) {
   return [
     { id: 'push', name: 'Per Push', blurb: 'Pay only when it snows. Plow/clear per visit.', est: perPush, scope: scopeOfWork(job, perPush), unit: 'per visit', recommended: recommendedId === 'push' },
     { id: 'salt', name: 'Clear + Salt', blurb: 'Every visit cleared and treated for ice.', est: withSalt, scope: scopeOfWork(job, withSalt), unit: 'per visit', recommended: recommendedId === 'salt' },
-    { id: 'seasonal', name: 'Seasonal Contract', blurb: `Unlimited service all winter (${events} events est.), ${pb.snow.seasonalDiscountPct}% off, ${money(seasonal.monthly)}/mo × ${pb.snow.seasonMonths}.`, est: seasonal, scope: scopeOfWork({ ...job, snow: { ...job.snow, contract: 'seasonal', salt: true } }, seasonal), unit: 'per season', recommended: recommendedId === 'seasonal' },
+    { id: 'seasonal', name: 'Seasonal Contract', blurb: `Unlimited service all winter${job.snow.salt ? ', salt included' : ''} (${events} events est.), ${pb.snow.seasonalDiscountPct}% off, ${money(seasonal.monthly)}/mo × ${pb.snow.seasonMonths}.`, est: seasonal, scope: scopeOfWork({ ...job, snow: { ...job.snow, contract: 'seasonal' } }, seasonal), unit: 'per season', recommended: recommendedId === 'seasonal' },
   ];
 }
 

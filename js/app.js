@@ -147,15 +147,23 @@ function newEstimate(division = 'tree', customer) {
   };
 }
 
+// The planner tries every safe way to do a job and keeps the cheapest, so one screen refresh asks
+// for the same price several times: the last few answers are kept, keyed by everything they use.
+const COMPUTED = new Map();
 function compute(est, { today = false } = {}) {
   const P = today ? { pb: S.pricebook, company: S.company } : pricingFor(est);
   const pb = P.pb;
   const margin = est.marginPct ?? pb.targetMarginPct;
+  const key = JSON.stringify([est.job, margin, est.selectedOption, est.discount, est.adjustments, pb, P.company]);
+  if (COMPUTED.has(key)) return COMPUTED.get(key);
   const options = buildOptions(est.job, pb, margin, P.company);
   const sel = options.find((o) => o.id === est.selectedOption) || options.find((o) => o.recommended) || options[0];
   const t = totals(sel.est.price, { discount: est.discount, adjustments: est.adjustments, taxPct: pb.taxPct, depositPct: pb.depositPct });
   const tiers = est.job.division === 'snow' ? snowDepthTiers(est.job, pb, margin, P.company) : null;
-  return { options, sel, t, tiers, margin, pb };
+  const out = { options, sel, t, tiers, margin, pb };
+  COMPUTED.set(key, out);
+  if (COMPUTED.size > 8) COMPUTED.delete(COMPUTED.keys().next().value);
+  return out;
 }
 
 // ---------------------------------------------------------------- locked prices
