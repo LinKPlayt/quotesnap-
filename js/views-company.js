@@ -60,7 +60,7 @@ export function viewResources(ctx) {
               <label class="f">Skill level<select data-c="workers.${i}.skill">${Object.entries(SKILLS).map(([k, l]) => opt(k, l, w.skill)).join('')}</select></label>
               ${num('Hourly labor cost ($)', `workers.${i}.rate`, w.rate)}
               ${num('Overtime rate ($)', `workers.${i}.otRate`, w.otRate)}
-              <label class="f">Status<select data-c="workers.${i}.active" data-type="boolsel">${opt('true', 'Active', w.active !== false)}${opt('false', 'Inactive', w.active === false)}</select></label>
+              <label class="f">Status<select data-c="workers.${i}.active" data-type="boolsel">${opt('true', 'Active', w.active !== false)}${opt('false', 'Inactive', w.active !== false)}</select></label>
             </div>
             <div class="chips" style="margin-top:.5rem"><span class="tiny muted">Can operate:</span>${Object.entries(CAPABILITIES).map(([k, l]) => chk(l, `workers.${i}.can.${k}`, w.can?.[k])).join('')}
               <span class="spacer"></span><button class="btn sm danger" data-delw="${i}">Remove</button></div>
@@ -156,9 +156,9 @@ export function viewRates(ctx) {
           <div class="card"><h2>🎓 Learn from completed jobs</h2>
             <p class="muted small">After a job, enter what really happened (open the quote, set it to Completed, fill in <b>Actual job</b>). Once at least 3 completed jobs point the same way, a suggested rate appears here. Nothing changes until you tap <b>Apply</b>.</p>
             <div class="small"><b>${done.length}</b> completed job${done.length === 1 ? '' : 's'} with actuals.</div>
-            ${sugg.length ? `<table class="t" style="margin-top:.5rem"><tr><th>Task</th><th class="n">Jobs</th><th class="n">Actual ÷ est.</th><th class="n">Rate now</th><th class="n">Suggested</th><th></th></tr>
+            ${sugg.length ? `<table class="t wide" style="margin-top:.5rem"><tr><th>Task</th><th class="n">Jobs</th><th class="n">Actual ÷ est.</th><th class="n">Rate now</th><th class="n">Suggested</th><th></th></tr>
               ${sugg.map((s, i) => `<tr><td>${esc(s.task)}<div class="tiny muted">${esc(s.why)}</div></td><td class="n">${s.jobs}</td><td class="n">${s.ratio}×</td><td class="n">${s.current}</td><td class="n">${s.ready ? `<b>${s.suggested}</b>` : '—'}</td><td>${s.ready ? `<button class="btn sm primary" data-apply="${i}">Apply</button>` : ''}</td></tr>`).join('')}</table>` : '<div class="muted small" style="margin-top:.4rem">No completed jobs with actuals yet.</div>'}
-            ${done.length ? `<h3>Estimated vs actual</h3><table class="t"><tr><th>Quote</th><th class="n">Est. h</th><th class="n">Actual h</th><th class="n">Est. cost</th><th class="n">Actual cost</th></tr>
+            ${done.length ? `<h3>Estimated vs actual</h3><table class="t wide"><tr><th>Quote</th><th class="n">Est. h</th><th class="n">Actual h</th><th class="n">Est. cost</th><th class="n">Actual cost</th></tr>
               ${done.slice(0, 12).map((e) => { const rows = compareJob(e.original, e.actual); const g = (l) => rows.find((r) => r.label === l) || {}; const h = g('Time on site'); const c = g('Total cost'); return `<tr><td><a href="#/e/${e.id}">${esc(e.number)}</a></td><td class="n">${h.est ?? '—'}</td><td class="n">${h.act ?? '—'}${h.pct != null ? ` <span class="tiny ${Math.abs(h.pct) > 10 ? 'bad' : 'muted'}">${h.pct > 0 ? '+' : ''}${h.pct}%</span>` : ''}</td><td class="n">${c.est != null ? money(c.est) : '—'}</td><td class="n">${c.act != null ? money(c.act) : '—'}${c.pct != null ? ` <span class="tiny ${Math.abs(c.pct) > 10 ? 'bad' : 'muted'}">${c.pct > 0 ? '+' : ''}${c.pct}%</span>` : ''}</td></tr>`; }).join('')}</table>` : ''}
             ${C.rateLog?.length ? `<h3>Change log</h3>${C.rateLog.slice(0, 10).map((l) => `<div class="tiny muted">${new Date(l.at).toLocaleDateString()}: ${esc(l.task)} ${l.from} → ${l.to} (${esc(l.reason)} Jobs: ${esc((l.jobs || []).join(', '))})</div>`).join('')}` : ''}
           </div>

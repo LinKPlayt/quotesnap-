@@ -518,8 +518,22 @@ async function milesFromAddress(est) {
 // ---------------------------------------------------------------- router
 
 let leaving = null;
-async function route() {
+// Screens change one at a time, and only the latest tap counts: fast taps or Back presses must never
+// let a slow, older screen finish on top of the newer one (that left blank pages and lost drafts).
+let routeSeq = 0;
+let routeChain = Promise.resolve();
+function route() {
+  const my = ++routeSeq;
+  const run = () => (my === routeSeq ? routeNow(my) : null);
+  // a screen that hangs must not freeze navigation: move on after 8 s
+  routeChain = routeChain.then(() => Promise.race([run(), new Promise((r) => setTimeout(r, 8000))])).catch((err) => console.error(err));
+  return routeChain;
+}
+async function routeNow(my) {
   if (leaving) { const l = leaving; leaving = null; await l(); }
+  if (my !== routeSeq) return;
+  // a send / sign window left open must not act on a screen that is gone
+  const md = $('#modal'); if (md?.open) md.close();
   const [path, query] = location.hash.slice(1).split('?');
   const parts = (path || '/').split('/').filter(Boolean);
   const q = new URLSearchParams(query || '');
@@ -531,6 +545,8 @@ async function route() {
     const e = newEstimate(q.get('d') || 'tree', q.get('c') ? JSON.parse(q.get('c')) : null);
     await saveSettings();
     await persist(e);
+    // they already went to another screen: drop this blank draft instead of yanking them back to it
+    if (my !== routeSeq && !location.hash.startsWith('#/new')) { S.estimates = S.estimates.filter((x) => x.id !== e.id); return saveEstimates(); }
     return location.replace('#/e/' + e.id);
   }
   if (name === 'e') return viewEditor(parts[1]);
@@ -702,15 +718,15 @@ function viewList(filter) {
       .filter((e) => !isEmptyDraft(e))
       .filter((e) => filter === 'all' || e.status === filter || (filter === 'won' && WON.includes(e.status)))
       .filter((e) => !qv || [e.customer.name, e.customer.address, e.number, e.summary?.title, e.customer.phone].join(' ').toLowerCase().includes(qv));
-    $('#rows').innerHTML = rows.length ? rows.map((e) => itemRow(e)).join('') : '<div class="empty">No quotes match.</div>';
+    $('#rows').innerHTML = rows.length ? rows.map((e) => itemRow(e)).join('') : S.estimates.length ? '<div class="empty">No quotes match. <a href="#/estimates">Show all</a></div>' : '<div class="empty"><div style="font-size:2.2rem">📋</div><b>No quotes yet</b><div class="small" style="margin:.3rem 0 .8rem">Snap a photo of the job and the quote fills itself in.</div><a class="btn primary big" href="#/new?d=tree">🌳 New tree quote</a> <a class="btn big" href="#/new?d=snow">❄ New snow quote</a></div>';
     hydrateThumbs($('#rows'));
   };
   app.innerHTML = `
     <div class="row" style="margin-bottom:.75rem"><h1>Quotes</h1><div class="spacer"></div>
       <button class="btn sm" id="csv">Export CSV</button></div>
     <input id="q" placeholder="Search name, address, quote #…" style="margin-bottom:.6rem">
-    <div class="chips" style="margin-bottom:.75rem">
-      ${['all', ...STATUSES].map((s) => `<a class="chip ${s === filter ? 'on' : ''}" href="#/estimates?s=${s}">${cap(s)}</a>`).join('')}
+    <div class="chips filters" style="margin-bottom:.75rem" role="tablist" aria-label="Filter quotes by stage">
+      ${['all', ...STATUSES].map((s) => { const n = s === 'all' ? S.estimates.length : S.estimates.filter((x) => x.status === s).length; return `<a class="chip ${s === filter ? 'on' : ''}" role="tab" aria-selected="${s === filter}" href="#/estimates?s=${s}">${cap(s)}${n ? ` <span class="cnt">${n}</span>` : ''}</a>`; }).join('')}
     </div>
     <div class="card"><div class="list" id="rows"></div></div>`;
   $('#q').addEventListener('input', draw);
@@ -795,7 +811,8 @@ async function viewEditor(id) {
     document.body.classList.remove('has-sendbar');
     await flushSave();
     const cur = S.estimates.find((x) => x.id === id);
-    if (isEmptyDraft(cur)) { S.estimates = S.estimates.filter((x) => x.id !== id); await saveEstimates(); }
+    // an untouched draft is thrown away, unless the screen is just refreshing or opening its own quote / job sheet
+    if (isEmptyDraft(cur) && !location.hash.includes(id)) { S.estimates = S.estimates.filter((x) => x.id !== id); await saveEstimates(); }
   };
   const customers = [...new Map(S.estimates.filter((x) => x.customer.name).map((x) => [x.customer.name, x.customer])).values()];
   const contacts = 'contacts' in navigator && 'ContactsManager' in window;
@@ -845,9 +862,9 @@ async function viewEditor(id) {
             </div></div>
           <div id="details"></div>
           <details class="fold" ${S.settings.simple ? '' : 'open'}><summary>📍 Distance, difficulty, rush or weekend work</summary>
-          <div class="grid g3" style="margin-top:.5rem">
+          <div class="grid g3 siteflags" style="margin-top:.5rem">
             ${numField('Distance (miles)', 'job.miles', e.job.miles)}
-            <div class="chips" style="align-items:end" id="siteflags"></div>
+            <div id="siteflags" style="display:contents"></div>
           </div></details>
         </div>
 
@@ -944,7 +961,7 @@ function renderSteps() {
     <button class="btn accent big" id="sb-send">✉ Send</button>`;
   $('#sb-send').onclick = async () => {
     if (!st.customer && !(await ask("You haven't added the customer's phone or email yet. Send anyway?", { ok: 'Send anyway', cancel: 'Add customer' }))) { askCustomer(e); return; }
-    $('#send').click();
+    if (ED?.est !== e) return; $('#send')?.click();
   };
   const sc = $('#sb-cust');
   if (sc) sc.onclick = () => askCustomer(e);
@@ -953,6 +970,7 @@ function renderSteps() {
 // ---- photos + AI panels
 
 async function renderPhotos() {
+  if (!ED) return; // the editor was closed while this was pending
   const e = ED.est;
   const box = $('#photos');
   const imgs = await Promise.all(e.photos.map(getPhoto));
@@ -1060,6 +1078,7 @@ function analysisTable(e) {
 }
 
 function addUpsell(i) {
+  if (!ED) return; // the editor was closed while this was pending
   const e = ED.est;
   const u = e.ai.upsells[i];
   const j = e.job;
@@ -1084,6 +1103,7 @@ function addUpsell(i) {
 }
 
 function refreshEditorAfterFill() {
+  if (!ED) return; // the editor was closed while this was pending
   const e = ED.est;
   for (const k of ['name', 'phone', 'email', 'address']) { const inp = $(`[data-k="customer.${k}"]`); if (inp) inp.value = e.customer[k] || ''; }
   $$('#div button').forEach((x) => x.classList.toggle('on', x.dataset.d === e.job.division));
@@ -1111,6 +1131,7 @@ function markAi() {
 }
 
 function renderCustomerExtras() {
+  if (!ED) return; // the editor was closed while this was pending
   const e = ED.est;
   const ml = $('#maplink');
   if (ml) ml.innerHTML = [
@@ -1123,16 +1144,15 @@ function renderCustomerExtras() {
 // ---- job details
 
 function renderDetails() {
+  if (!ED) return; // the editor was closed while this was pending
   const e = ED.est;
   const j = e.job;
   const el = $('#details');
   const M = S.company.multipliers;
   $('#siteflags').innerHTML = `
-    <div class="grid g2" style="width:100%">
       <label class="f">Overall difficulty<select data-k="job.difficulty">${Object.entries(M.difficulty).map(([k, m]) => opt(k, `${m.label} (${m.value}×)`, j.difficulty || 'normal')).join('')}</select></label>
       ${j.division === 'tree' ? `<label class="f">Property<select data-k="job.property">${opt('residential', 'Residential', j.property || 'residential')}${opt('commercial', 'Commercial', j.property)}</select></label>` : ''}
-    </div>
-    <div class="chips" style="width:100%">${check('🚨 Emergency / urgent', 'job.emergency', j.emergency)}${check('🌪 Storm response', 'job.storm', j.storm)}${check('Weekend', 'job.weekend', j.weekend)}${check('Holiday', 'job.holiday', j.holiday)}${j.division === 'tree' ? check('Permit needed', 'job.permit', j.permit) : ''}</div>`;
+    <div class="chips" style="grid-column:1/-1">${check('🚨 Emergency / urgent', 'job.emergency', j.emergency)}${check('🌪 Storm response', 'job.storm', j.storm)}${check('Weekend', 'job.weekend', j.weekend)}${check('Holiday', 'job.holiday', j.holiday)}${j.division === 'tree' ? check('Permit needed', 'job.permit', j.permit) : ''}</div>`;
   const condChips = Object.entries(M.conditions)
     .filter(([k, c]) => (c.division === 'both' || c.division === j.division) && !(j.division === 'tree' && ['powerLines', 'overHouse', 'nearStructure', 'dead', 'leaning', 'fenceGarden'].includes(k)))
     .map(([k, c]) => check(`${c.label} <span class="tiny muted">${c.value}×</span>`, `job.conditions.${k}`, j.conditions?.[k])).join('');
@@ -1244,6 +1264,7 @@ async function renderForecast() {
 }
 
 function renderAdjustments() {
+  if (!ED) return; // the editor was closed while this was pending
   const e = ED.est;
   $('#adjs').innerHTML = e.adjustments.length
     ? e.adjustments.map((a, i) => `<div class="row" style="margin-bottom:.4rem">
@@ -1260,6 +1281,7 @@ function renderHistory() {
 }
 
 function renderActual() {
+  if (!ED) return; // the editor was closed while this was pending
   const e = ED.est;
   const box = $('#actual');
   if (!box) return;
@@ -1302,6 +1324,7 @@ function renderActual() {
 }
 
 function renderSchedule() {
+  if (!ED) return; // the editor was closed while this was pending
   const e = ED.est;
   renderActual();
   const box = $('#sched');
@@ -1312,7 +1335,7 @@ function renderSchedule() {
       ${e.scheduledFor ? '<button class="btn" id="ics">Add to calendar</button>' : ''}</div>`;
   $('#jobdate').onchange = (ev) => {
     e.scheduledFor = ev.target.value;
-    if (e.scheduledFor && e.status === 'accepted') { setStatus(e, 'scheduled'); $('#status').value = e.status; }
+    if (e.scheduledFor && e.status === 'accepted') { setStatus(e, 'scheduled'); const st = $('#status'); if (st) st.value = e.status; }
     logHistory(e, e.scheduledFor ? `Scheduled for ${fmtDate(e.scheduledFor)}` : 'Schedule cleared');
     renderSchedule();
     renderHistory();
@@ -1323,9 +1346,10 @@ function renderSchedule() {
 }
 
 function downloadIcs(e) {
-  const d = e.scheduledFor.replace(/-/g, '');
   const next = new Date(e.scheduledFor + 'T12:00:00');
-  next.setDate(next.getDate() + (compute(e).sel.est.days || 1));
+  if (Number.isNaN(next.getTime())) return toast('Pick a job date first.');
+  const d = e.scheduledFor.replace(/-/g, '');
+  next.setDate(next.getDate() + Math.min(365, Math.max(1, Math.ceil(+compute(e).sel.est.days || 1))));
   const end = next.toISOString().slice(0, 10).replace(/-/g, '');
   const icsEsc = (s) => String(s || '').replace(/[\\;,]/g, (c) => '\\' + c).replace(/\n/g, '\\n');
   const { sel } = compute(e);
@@ -1344,6 +1368,7 @@ function downloadIcs(e) {
 // ---- results
 
 function renderResults() {
+  if (!ED) return; // the editor was closed while this was pending
   const e = ED.est;
   const { options, sel, t, tiers, margin } = compute(e);
   const x = sel.est;
@@ -1466,6 +1491,7 @@ async function flushSave() {
 
 let notesTimer = null;
 function readNotes() {
+  if (!ED) return; // the editor was closed while this was pending
   const e = ED.est;
   const p = parseDescription(e.job.description);
   const before = { job: structuredClone(e.job), customer: { ...e.customer } };
@@ -1617,7 +1643,7 @@ function wireEditor() {
 
   $('#send').onclick = () => openSend(e, refresh);
   $('#sign').onclick = () => openSign(e, refresh);
-  function refresh() { $('#status').value = e.status; renderHistory(); renderSchedule(); changed(); }
+  function refresh() { if (ED?.est !== e) { persist(structuredClone(e)); return; } const st = $('#status'); if (st) st.value = e.status; renderHistory(); renderSchedule(); changed(); }
   $('#dup').onclick = async () => {
     await flushSave();
     const copy = { ...structuredClone(e), id: uid(), number: `${S.settings.prefix}-${S.settings.nextNumber++}`, status: 'draft', createdAt: new Date().toISOString(), signature: null, signedName: null, scheduledFor: '', history: [{ at: new Date().toISOString(), text: `Duplicated from ${e.number}` }] };

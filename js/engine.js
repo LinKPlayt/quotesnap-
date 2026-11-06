@@ -58,7 +58,9 @@ export function parseDescription(text = '') {
   const treeWords = /\b(tree|oak|maple|pine|stump|limb|branch|trim|prune|removal|remove|arborist|canopy|spruce|ash|elm|cable)\b/;
   out.division = snowWords.test(t) && !treeWords.test(t) ? 'snow' : treeWords.test(t) ? 'tree' : snowWords.test(t) ? 'snow' : null;
 
-  if (/\b(emergency|storm|after hours|asap|urgent|fell on|fallen on)\b/.test(t)) out.flags.emergency = true;
+  // "storm" is an emergency for tree work (storm damage), but every snow job follows a storm
+  const stormEmergency = out.division !== 'snow' && /\bstorm\b/.test(t);
+  if (stormEmergency || /\b(emergency|after hours|asap|urgent|fell on|fallen on)\b/.test(t)) out.flags.emergency = true;
   if (/\bpermit\b/.test(t)) out.flags.permit = true;
   const miles = t.match(/(\d+(?:\.\d+)?)\s*(?:miles?|mi)\b/);
   if (miles) out.flags.miles = +miles[1];
@@ -397,9 +399,9 @@ export function snowDepthTiers(job, pb = DEFAULT_PRICEBOOK, marginPct, company) 
 
 // Totals for a chosen option with tax, discount and custom adjustments.
 export function totals(price, { discount = 0, adjustments = [], taxPct = 0, depositPct = 0 } = {}) {
-  const adj = adjustments.reduce((s, a) => s + (+a.amount || 0), 0);
-  const subtotal = Math.max(0, price + adj - (+discount || 0));
-  const tax = r2(subtotal * (taxPct / 100));
+  const adj = (adjustments || []).reduce((s, a) => s + (+a?.amount || 0), 0);
+  const subtotal = Math.max(0, (+price || 0) + adj - Math.max(0, +discount || 0));
+  const tax = r2(subtotal * (Math.max(0, +taxPct || 0) / 100));
   const total = r2(subtotal + tax);
-  return { adj, subtotal, tax, total, deposit: roundUp(total * (depositPct / 100), 1) };
+  return { adj, subtotal, tax, total, deposit: roundUp(total * (Math.min(100, Math.max(0, +depositPct || 0)) / 100), 1) };
 }

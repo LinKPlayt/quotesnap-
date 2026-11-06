@@ -138,9 +138,16 @@ Photos produce a structured analysis with **ranges and a confidence for each ite
 ## Develop
 
 ```bash
-npm test             # node --test: engine, planner, learning, auto-fill and on-device AI tests
+npm test             # node --test: engine, planner, learning, auto-fill, on-device AI, logic and fuzz tests
+FUZZ_SEED=42 FUZZ_N=5000 node --test tests/fuzz.test.mjs   # heavier fuzz run; any failure replays from its seed
 npm run build:ai     # optional: rebuild models/tinyclip-vit-8m-16 (Python, see On-device AI)
 ```
+
+**Logic tests** (`tests/logic.test.mjs`) pin exact business rules: discounts never go negative, tax after discount, debris and stump options, travel radius, minimum charges, rental minimums, emergency and commercial markups, seasonal contract math, inactive workers and equipment in the shop never scheduled, and safety limits.
+
+**Fuzz tests** (`tests/fuzz.test.mjs`, helpers in `tests/helpers/fuzzgen.mjs`) throw thousands of random and broken jobs, companies and price books at the planner (typos like `1000000000`, `abc`, negatives, unknown choices). They check that every quote stays finite, profit = price − cost, the cost lines add up, price is at least cost + minimum profit, the crew never exceeds active workers, equipment in the shop is never used, and no "NaN" or "undefined" reaches the customer. Metamorphic rules: a higher margin never lowers the price, adding a tree never makes the same crew cheaper, and more skilled workers never make a job slower.
+
+**Safety limits:** typo values are capped and the quote says so: trees per row 100, height 400 ft, pay $500/hr, machine cost $1,500/hr per line, production rates within 10%–10× of the standard rate.
 
 ```
 index.html           app shell

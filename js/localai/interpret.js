@@ -100,7 +100,7 @@ export function interpret(results, { notes = '', division: current = 'tree' } = 
   const photos = results.map((r, i) => ({ ...r, i })).filter((r) => r.probs); // keep each photo's position
   if (!photos.length) throw new Error(results.find((r) => r?.error)?.error || 'None of the photos could be analyzed.');
 
-  const scene = mix(photos, 'scene', () => 1);
+  const scene = mix(photos, 'scene', () => 1) || { tree: 0.5, snow: 0.5, other: 0 };
   const parsed = parseDescription(notes || '');
   const observations = [];
   const missing = [];

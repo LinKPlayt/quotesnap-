@@ -59,6 +59,8 @@ export const ATTACHMENT_TYPES = {
   other: 'Other',
 };
 
+export const MAX_QTY = 50; // per equipment record
+
 export const AVAILABILITY = { available: 'Available', repair: 'In the shop', season: 'Out of season / stored' };
 
 let n = 0;
@@ -209,20 +211,27 @@ export function mergeCompany(saved) {
 // ---------- fleet: what is actually available today ----------
 
 // Expand equipment records into individual available units.
+export const MAX_UNIT_COST = 1500; // $/hr for one cost line of one machine; a crane is about $400
+const unitCost = (v) => Math.min(MAX_UNIT_COST, Math.max(0, +v || 0));
+
 export function fleet(company) {
   const units = [];
   for (const e of company?.equipment || []) {
     if (e.availability && e.availability !== 'available') continue;
-    const count = Math.max(0, Math.min(+e.quantity || 0, e.available === undefined || e.available === '' ? +e.quantity || 0 : +e.available));
+    // a typo like quantity 1000000000 must not create a billion machines
+    const qty = Math.min(MAX_QTY, Math.max(0, Math.floor(+e.quantity || 0)));
+    const avail = e.available === undefined || e.available === '' ? qty : Math.floor(+e.available || 0);
+    const count = Math.max(0, Math.min(qty, avail));
     for (let i = 0; i < count; i++) {
       units.push({
         recordId: e.id,
-        name: count > 1 || +e.quantity > 1 ? `${e.name} #${i + 1}` : e.name,
+        name: count > 1 || qty > 1 ? `${e.name || EQUIPMENT_TYPES[e.type]?.label || 'Equipment'} #${i + 1}` : e.name || EQUIPMENT_TYPES[e.type]?.label || 'Equipment',
         type: e.type,
         attachments: (e.attachments || []).map((a) => a.type),
-        hourly: +e.hourly || 0,
-        fuel: +e.fuel || 0,
-        maintenance: +e.maintenance || 0,
+        hourly: unitCost(e.hourly),
+        fuel: unitCost(e.fuel),
+        maintenance: unitCost(e.maintenance),
+        costCapped: [e.hourly, e.fuel, e.maintenance].some((v) => +v > MAX_UNIT_COST),
         operator: e.operator !== false && !!EQUIPMENT_TYPES[e.type]?.op,
       });
     }

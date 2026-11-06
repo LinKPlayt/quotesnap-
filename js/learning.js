@@ -50,11 +50,15 @@ export function newActual(orig = {}) {
 
 // Actual time on site: from start/finish if given, else labor-hours ÷ workers.
 export function actualSiteHours(a) {
+  const travel = Math.max(0, +a.travelHours || 0);
   if (a.start && a.finish) {
     const h = (new Date(a.finish) - new Date(a.start)) / 36e5;
-    if (h > 0) return r2(Math.max(0, h - (+a.travelHours || 0)));
+    if (h > 0 && h - travel > 0) return r2(h - travel);
   }
-  if (+a.laborHours && +a.workers) return r2(+a.laborHours / +a.workers - (+a.travelHours || 0));
+  if (+a.laborHours > 0 && +a.workers > 0) {
+    const h = +a.laborHours / +a.workers - travel;
+    if (h > 0) return r2(h);
+  }
   return null;
 }
 
@@ -108,7 +112,8 @@ export function rateSuggestions(estimates, company, { minJobs = 3, threshold = 0
     const ratio = median(jobs.map((j) => j.ratio));
     const enough = jobs.length >= minJobs;
     const off = Math.abs(ratio - 1) >= threshold;
-    const suggested = r2(rate.rate / ratio);
+    // never change a rate more than 4x in one step, never to zero
+    const suggested = Math.max(0.01, r2(rate.rate / Math.min(4, Math.max(0.25, ratio))));
     out.push({
       rateId, task: rate.task, unit: rate.unit, jobs: jobs.length, ratio: r2(ratio), current: rate.rate, suggested,
       ready: enough && off,
