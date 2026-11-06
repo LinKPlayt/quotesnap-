@@ -4,7 +4,9 @@ import {
   newJob, newTree, parseDescription, applyParsed, describeChanges, buildOptions, snowDepthTiers, totals, money, SPECIES,
 } from './engine.js';
 import { analyzeJob, aiToParsed, testKey, DEFAULT_MODEL } from './ai.js';
-import { getPosition, reverseGeocode, geocode, roadMiles, forecast, stormAlerts, dayName } from './geo.js';
+import { getPosition, reverseGeocode, geocode, roadMiles, drivingMiles, forecast, stormAlerts, dayName } from './geo.js';
+import { pickFuel, suggestPricing, applyChanges, profileOf, stateFrom, fuelUse } from './autoprice.js';
+import { photoLocation } from './exif.js';
 import { makePdf } from './pdf.js';
 import { localAI } from './localai/manager.js';
 import { interpret } from './localai/interpret.js';
@@ -82,6 +84,14 @@ async function load() {
   S.estimates = (await kv.get('estimates')) || [];
   if (saved.onboarded === undefined && S.estimates.length) S.settings.onboarded = true;
   S.company = mergeCompany(await kv.get('company'));
+  // prices each sent quote was made with (see lockPrices)
+  S.snaps = new Map();
+  S.snapCache = new Map();
+  for (const k of (await kv.keys()) || []) if (String(k).startsWith('snap:')) S.snaps.set(String(k).slice(5), await kv.get(k));
+  const unlocked = S.estimates.filter((e) => e.status !== 'draft' && !e.pricedRef);
+  if (unlocked.length) { await Promise.all(unlocked.map((e) => lockPrices(e))); await saveEstimates(); }
+  const used = new Set(S.estimates.map((e) => e.pricedRef).filter(Boolean));
+  for (const h of [...S.snaps.keys()]) if (!used.has(h)) { S.snaps.delete(h); kv.del('snap:' + h); }
 }
 const saveSettings = () => kv.set('settings', S.settings);
 const saveCompany = () => kv.set('company', S.company);
@@ -98,6 +108,8 @@ async function addPhotos(est, files) {
     if (f.type && !f.type.startsWith('image/')) { toast(`${f.name || 'That file'} is not a photo`); continue; }
     if (f.size > 60e6) { toast(`${f.name || 'That photo'} is too large (over 60 MB)`); continue; }
     try {
+      // where the photo was taken (if the phone saved it): used for the job address and distance
+      if (!est.photoGeo) { const g = await photoLocation(f); if (g) est.photoGeo = { lat: g.lat, lon: g.lon, takenAt: g.takenAt || null }; }
       const data = await compressImage(f);
       const pid = uid();
       await kv.set('photo:' + pid, data);
@@ -133,14 +145,43 @@ function newEstimate(division = 'tree', customer) {
   };
 }
 
-function compute(est) {
-  const pb = S.pricebook;
+function compute(est, { today = false } = {}) {
+  const P = today ? { pb: S.pricebook, company: S.company } : pricingFor(est);
+  const pb = P.pb;
   const margin = est.marginPct ?? pb.targetMarginPct;
-  const options = buildOptions(est.job, pb, margin, S.company);
+  const options = buildOptions(est.job, pb, margin, P.company);
   const sel = options.find((o) => o.id === est.selectedOption) || options.find((o) => o.recommended) || options[0];
   const t = totals(sel.est.price, { discount: est.discount, adjustments: est.adjustments, taxPct: pb.taxPct, depositPct: pb.depositPct });
-  const tiers = est.job.division === 'snow' ? snowDepthTiers(est.job, pb, margin, S.company) : null;
-  return { options, sel, t, tiers, margin };
+  const tiers = est.job.division === 'snow' ? snowDepthTiers(est.job, pb, margin, P.company) : null;
+  return { options, sel, t, tiers, margin, pb };
+}
+
+// ---------------------------------------------------------------- locked prices
+// Costs now change by themselves (fuel is updated daily), so a quote that has left Draft keeps the
+// prices it was made with: the customer's number never moves. Snapshots are shared between quotes
+// made on the same day, so they take little space.
+function hashStr(str) {
+  let h = 5381;
+  for (let i = 0; i < str.length; i++) h = ((h * 33) ^ str.charCodeAt(i)) >>> 0;
+  return h.toString(36) + str.length.toString(36);
+}
+function lockPrices(est) {
+  const pb = structuredClone(S.pricebook);
+  delete pb.autoLog;
+  const data = { pb, company: structuredClone(S.company) };
+  const h = hashStr(JSON.stringify(data));
+  est.pricedRef = h;
+  est.pricedAt = new Date().toISOString();
+  if (S.snaps.has(h)) return Promise.resolve();
+  S.snaps.set(h, data);
+  return kv.set('snap:' + h, data);
+}
+function pricingFor(est) {
+  const ref = est?.pricedRef;
+  const snap = ref && S.snaps?.get(ref);
+  if (!snap) return { pb: S.pricebook, company: S.company, locked: false };
+  if (!S.snapCache.has(ref)) S.snapCache.set(ref, { pb: mergePricebook(snap.pb), company: mergeCompany(snap.company), locked: true });
+  return S.snapCache.get(ref);
 }
 
 function jobTitle(job) {
@@ -176,9 +217,12 @@ function logHistory(est, text) {
 
 function setStatus(est, status) {
   if (est.status === status) return;
+  const wasDraft = est.status === 'draft';
   est.status = status;
   est[status + 'At'] = new Date().toISOString();
   logHistory(est, `Status → ${status}`);
+  if (status === 'draft') { if (est.pricedRef) { delete est.pricedRef; delete est.pricedAt; logHistory(est, "Back to draft: today's prices are used again"); } }
+  else if (wasDraft || !est.pricedRef) lockPrices(est);
   // freeze the original estimate when the customer says yes (used to learn from actual results)
   if (WON.includes(status) && !est.original) {
     const { sel } = compute(est);
@@ -461,12 +505,93 @@ localAI.onStatus(() => {
   if (ED && AI.busy.has(ED.est.id)) renderAiStatus();
 });
 
+// ---------------------------------------------------------------- fuel prices & auto pricing
+// data/fuel.json is refreshed every day by .github/workflows/fuel.yml from the U.S. Energy
+// Information Administration (free, no key). The raw GitHub copy is a backup while the site rebuilds.
+const FUEL_URLS = ['data/fuel.json', 'https://raw.githubusercontent.com/LinKPlayt/quotesnap-/main/data/fuel.json'];
+const FUEL = { data: null, fuel: null, loc: null, error: '', loading: null };
+const usd2 = (n) => `$${(+n || 0).toFixed(2)}`;
+
+function shopLoc() {
+  const g = S.settings.geo.shop;
+  const state = g?.state || stateFrom(g?.label) || stateFrom(S.settings.business.address) || null;
+  return { lat: g?.lat ?? null, lon: g?.lon ?? null, state, hasShop: !!g };
+}
+function pickNow() {
+  FUEL.loc = shopLoc();
+  FUEL.fuel = pickFuel(FUEL.data, FUEL.loc, S.pricebook.auto?.pumpPrice || {});
+  return FUEL.fuel;
+}
+function logAuto(done, why) {
+  if (!done.length) return;
+  const log = (S.pricebook.autoLog ||= []);
+  log.unshift({ at: new Date().toISOString(), why, week: FUEL.fuel?.week || null, items: done.map((c) => ({ label: c.label, from: c.from, to: c.to, unit: c.unit })) });
+  log.length = Math.min(log.length, 30);
+}
+// Apply chosen suggestions. Applying one also turns its daily auto-update back on.
+async function applyPricing(changes, why = 'Auto pricing') {
+  const done = applyChanges(S.company, S.pricebook, changes);
+  const manual = S.pricebook.auto?.manual || {};
+  for (const c of done) {
+    if (c.target === 'pb') delete manual[c.path];
+    else if (c.field === 'fuel') { const eq = S.company.equipment.find((x) => x.id === c.eqId); if (eq) eq.fuelManual = false; }
+  }
+  if (done.some((c) => c.target === 'equip')) S.company.sample = false;
+  logAuto(done, why);
+  await saveCompany();
+  await savePricebook();
+  return done;
+}
+function suggestNow() { return suggestPricing(S.company, S.pricebook, pickNow(), profileOf(S.pricebook)); }
+
+async function refreshFuel({ force = false, quiet = false } = {}) {
+  if (FUEL.loading) return FUEL.loading;
+  FUEL.loading = (async () => {
+    const today = new Date().toISOString().slice(0, 10);
+    const cache = S.settings.fuelCache;
+    let data = cache?.data || null;
+    FUEL.error = '';
+    if (force || cache?.checked !== today || !data) {
+      let got = false;
+      for (const u of FUEL_URLS) {
+        try {
+          const r = await fetch(u, { cache: 'no-cache' });
+          const d = r.ok ? await r.json() : null;
+          if (d?.gas?.US) { got = true; if (!data || String(d.week || '') >= String(data.week || '')) data = d; }
+        } catch { /* offline: try the next one, then keep the last prices we had */ }
+      }
+      if (got) { S.settings.fuelCache = { checked: today, data }; await saveSettings(); }
+      else FUEL.error = data ? `Couldn't check for new fuel prices (offline?). Using the week of ${data.week}.` : "Couldn't load fuel prices (offline?).";
+    }
+    // the shop's state picks local prices: look it up once from the shop's position
+    const g = S.settings.geo.shop;
+    if (g && !g.state && Number.isFinite(+g.lat) && !stateFrom(g.label)) {
+      const st = stateFrom(await reverseGeocode(g.lat, g.lon).catch(() => ''));
+      if (st) { g.state = st; await saveSettings(); }
+    }
+    FUEL.data = data;
+    pickNow();
+    const P = profileOf(S.pricebook);
+    if (FUEL.fuel && P.daily && (force || S.pricebook.auto?.lastDaily !== today)) {
+      const done = await applyPricing(suggestNow().filter((c) => c.auto), 'Daily fuel update');
+      (S.pricebook.auto ||= {}).lastDaily = today;
+      await savePricebook();
+      if (done.length && !quiet) toast(`⛽ Fuel costs updated for today: diesel ${usd2(FUEL.fuel.diesel.price)}, gas ${usd2(FUEL.fuel.gas.price)} a gallon (${FUEL.fuel.diesel.label})`, 5000);
+      if (done.length && ED) renderResults();
+    }
+    return FUEL;
+  })().finally(() => { FUEL.loading = null; });
+  return FUEL.loading;
+}
+
 // ---------------------------------------------------------------- location
 
 async function locateInto(est, { auto = false } = {}) {
   try {
-    const pos = await getPosition();
-    est.geo = { lat: pos.lat, lon: pos.lon };
+    // automatic: where the photo was taken beats where the phone is now (gallery photos, back at the shop)
+    const fromPhoto = auto && est.photoGeo;
+    const pos = fromPhoto ? est.photoGeo : await getPosition();
+    est.geo = { lat: pos.lat, lon: pos.lon, from: fromPhoto ? 'photo' : 'here' };
     let filled = false;
     if (!est.customer.address && !est.locks?.['customer.address']) {
       const addr = await reverseGeocode(pos.lat, pos.lon).catch(() => '');
@@ -480,9 +605,9 @@ async function locateInto(est, { auto = false } = {}) {
     }
     const shop = S.settings.geo.shop;
     if (shop && !est.locks?.['job.miles'] && !est.job.miles) {
-      const mi = roadMiles(shop, est.geo);
-      if (mi <= 200) est.job.miles = mi;
-      else toast(`That spot is ${Math.round(mi).toLocaleString()} miles from your shop, so the distance was not filled in. Check the address.`, 5000);
+      const d = await drivingMiles(shop, est.geo);
+      if (d.miles <= 200) { est.job.miles = d.miles; est.milesInfo = { how: d.how, minutes: d.minutes || null, from: est.geo.from }; }
+      else toast(`That spot is ${Math.round(d.miles).toLocaleString()} miles from your shop, so the distance was not filled in. Check the address.`, 5000);
     }
     if (ED && ED.est === est) {
       const inp = $('[data-k="customer.address"]');
@@ -493,7 +618,7 @@ async function locateInto(est, { auto = false } = {}) {
       changed();
       renderForecast();
     }
-    if (filled || !auto) toast(filled ? `📍 Address filled in: ${est.customer.address}` : '📍 Location saved for this job');
+    if (filled || !auto) toast(filled ? `📍 Address filled in${fromPhoto ? " from the photo's location" : ''}: ${est.customer.address}` : '📍 Location saved for this job');
   } catch (err) {
     if (!auto) toast(err.message, 4000);
   }
@@ -504,10 +629,11 @@ async function milesFromAddress(est) {
   if (!shop || !est.customer.address || est.locks?.['job.miles']) return;
   try {
     const g = await geocode(est.customer.address);
-    est.geo = { lat: g.lat, lon: g.lon };
-    const dist = roadMiles(shop, est.geo);
-    if (dist > 200) { toast(`That address looks ${Math.round(dist).toLocaleString()} miles away, so the distance was not filled in. Check it.`, 5000); return; }
-    est.job.miles = dist;
+    est.geo = { lat: g.lat, lon: g.lon, from: 'address' };
+    const d = await drivingMiles(shop, est.geo);
+    if (d.miles > 200) { toast(`That address looks ${Math.round(d.miles).toLocaleString()} miles away, so the distance was not filled in. Check it.`, 5000); return; }
+    est.job.miles = d.miles;
+    est.milesInfo = { how: d.how, minutes: d.minutes || null, from: 'address' };
     const mi = $('[data-k="job.miles"]');
     if (mi) mi.value = est.job.miles;
     changed();
@@ -892,6 +1018,7 @@ async function viewEditor(id) {
           <details class="fold" ${S.settings.simple ? '' : 'open'}><summary>📍 Distance, difficulty, rush or weekend work</summary>
           <div class="grid g3 siteflags" style="margin-top:.5rem">
             ${numField('Distance (miles)', 'job.miles', e.job.miles)}
+            <div class="tiny muted" id="milesnote" style="grid-column:1/-1;margin-top:-.2rem"></div>
             <div id="siteflags" style="display:contents"></div>
           </div></details>
         </div>
@@ -914,7 +1041,7 @@ async function viewEditor(id) {
           <div id="res-top"></div>
           <details class="fold" ${S.settings.simple ? '' : 'open'}><summary>🔍 How this price was worked out</summary>
           <label class="f" style="margin-top:.5rem">Target margin: <b id="mval"></b>
-            <input type="range" min="10" max="60" step="1" id="margin" value="${e.marginPct ?? S.pricebook.targetMarginPct}"></label>
+            <input type="range" min="10" max="60" step="1" id="margin" value="${e.marginPct ?? pricingFor(e).pb.targetMarginPct}"></label>
           <div id="res"></div></details>
         </div>
         <div class="card" id="card-send">
@@ -983,7 +1110,7 @@ function renderSteps() {
   const { t } = compute(e);
   const sb = $('#sendbar');
   if (!sb) return;
-  const hint = !st.photos ? 'Next: add a photo' : !st.customer ? 'Next: who is it for?' : e.status === 'draft' ? 'Ready to send' : `Stage: ${cap(e.status)}`;
+  const hint = !st.photos ? 'Next: add a photo' : !st.customer ? 'Next: who is it for?' : e.status === 'draft' ? 'Ready to send' : `${e.pricedRef ? '🔒 Price locked · ' : ''}Stage: ${cap(e.status)}`;
   sb.innerHTML = `<div class="sb-price"><div class="sb-total">${money(t.total)}</div><div class="tiny muted">${esc(hint)}</div></div>
     ${!st.customer ? '<button class="btn big" id="sb-cust">👤 Customer</button>' : ''}
     <button class="btn accent big" id="sb-send">✉ Send</button>`;
@@ -1010,8 +1137,11 @@ async function renderPhotos() {
      <label class="photo add"><input type="file" accept="image/*" multiple id="file2">🖼<br>Photos</label>`;
   const onFiles = async (ev) => {
     const files = [...ev.target.files];
+    const hadSpot = !!e.photoGeo;
     const n = await addPhotos(e, files);
     if (!n) return;
+    // first photo with a location and no address yet: fill in the address and distance from it
+    if (!hadSpot && e.photoGeo && !e.customer.address && S.settings.geo.autoLocate) locateInto(e, { auto: true });
     changed();
     renderPhotos();
     scheduleAi(e);
@@ -1402,14 +1532,34 @@ function downloadIcs(e) {
 
 // ---- results
 
+function renderMilesNote(e) {
+  const el = $('#milesnote');
+  if (!el) return;
+  const i = e.milesInfo;
+  const from = { photo: "the photo's location", here: 'where you were standing', address: 'the job address' };
+  if (e.locks?.['job.miles']) el.textContent = 'Typed in by you.';
+  else if (i && +e.job.miles) el.textContent = `${e.job.miles} miles ${i.how === 'road' ? 'by road' : '(estimate, offline)'} from your shop${i.minutes ? `, about ${i.minutes} min` : ''}, using ${from[i.from] || 'the job location'}.`;
+  else if (!S.settings.geo.shop) el.innerHTML = 'Set your shop in <a href="#/settings">Settings → Location</a> and this fills itself in.';
+  else el.textContent = '';
+}
+
 function renderResults() {
   if (!ED) return; // the editor was closed while this was pending
   const e = ED.est;
   const { options, sel, t, tiers, margin } = compute(e);
   const x = sel.est;
+  renderMilesNote(e);
   $('#mval').textContent = margin + '%';
   renderSteps();
-  $('#res-top').innerHTML = `
+  const lockBar = (() => {
+    if (!e.pricedRef) return '';
+    const now = compute(e, { today: true }).t.total;
+    const diff = Math.round(now - t.total);
+    return `<div class="lockbar">🔒 Prices locked on ${fmtDate(e.pricedAt)}, when this quote left Draft, so the customer's price doesn't change.
+      ${Math.abs(diff) >= 1 ? `With today's costs it would be <b>${money(now)}</b> (${diff > 0 ? '+' : '−'}${money(Math.abs(diff))}).` : "Today's costs give the same price."}
+      ${Math.abs(diff) >= 1 ? '<button class="btn sm" id="reprice">Use today\'s prices</button>' : ''}</div>`;
+  })();
+  $('#res-top').innerHTML = `${lockBar}
     <div class="muted small">${esc(jobTitle(e.job))}</div>
     <div class="price-hero"><div class="big">${money(t.total)}</div><div class="muted">${sel.unit ? esc(sel.unit) : 'customer price'}${t.tax ? ' incl. tax' : ''}</div></div>
     <div class="row small"><span>Profit <b style="color:var(--ok)">${money(x.profit + t.adj - (e.discount || 0))}</b></span>
@@ -1422,6 +1572,16 @@ function renderResults() {
         <div class="n">${esc(o.name)}</div><div class="p">${money(o.est.price)}</div><div class="b">${esc(o.blurb || '')}</div>
       </button>`).join('')}</div>` : ''}`;
   $$('[data-opt]').forEach((b) => (b.onclick = () => { e.selectedOption = b.dataset.opt; renderResults(); changed(false); }));
+  const rp = $('#reprice');
+  if (rp) rp.onclick = async () => {
+    if (!(await ask("Re-price this quote with today's costs? If the customer already has it, send them the new quote.", { title: "Use today's prices?", ok: 'Re-price' }))) return;
+    if (!ED || ED.est !== e) return;
+    await lockPrices(e);
+    logHistory(e, "Re-priced with today's costs");
+    renderResults();
+    renderHistory();
+    changed();
+  };
 
   const tabs = { plan: `Breakdown${x.notes?.length ? ` <span class="badge sent">${x.notes.length}</span>` : ''}`, scope: 'Scope', labor: 'Labor', equip: 'Equipment', mat: 'Disposal & materials', profit: 'Profit', safety: 'Safety' };
   let body = '';
@@ -1484,7 +1644,7 @@ function renderResults() {
         <tr><td>Disposal cost${pvLabel}</td><td class="n">${money(x.disposalCost || 0)}</td></tr>
         <tr><td>Travel cost${pvLabel}</td><td class="n">${money(x.travel)}</td></tr>
         <tr><td>Other costs (materials, mobilization)${pvLabel}</td><td class="n">${money(x.otherCost ?? 0)}</td></tr>
-        <tr><td>Overhead (${S.pricebook.overheadPct}%)${pvLabel}</td><td class="n">${money(x.overhead)}</td></tr>
+        <tr><td>Overhead (${pricingFor(ED.est).pb.overheadPct}%)${pvLabel}</td><td class="n">${money(x.overhead)}</td></tr>
         <tr><td><b>Total job cost${per}</b></td><td class="n"><b>${money(x.fullCost)}</b></td></tr>
         ${!x.seasonal && x.basePrice ? `<tr><td>At ${margin}% target margin</td><td class="n">${money(x.basePrice)}</td></tr>` : ''}
         ${!x.seasonal ? (x.markups || []).map((m) => `<tr><td>+ ${esc(m.label)} markup</td><td class="n">${m.pct}%</td></tr>`).join('') : ''}
@@ -1669,7 +1829,9 @@ function wireEditor() {
       rec.onerror = (ev) => { if (ev.error === 'not-allowed') toast('Microphone permission was denied.'); };
       rec.onend = () => {
         rec = null;
-        $('#mic').textContent = '🎤 Talk';
+        const mic = $('#mic');
+        if (mic) mic.textContent = '🎤 Talk';
+        if (ED?.est !== e) return; // the quote was closed while listening
         scheduleAi(e, 400);
         if (wantSend) { wantSend = false; setTimeout(() => $('#send')?.click(), 300); }
       };
@@ -1685,6 +1847,7 @@ function wireEditor() {
     const copy = { ...structuredClone(e), id: uid(), number: `${S.settings.prefix}-${S.settings.nextNumber++}`, status: 'draft', createdAt: new Date().toISOString(), signature: null, signedName: null, scheduledFor: '', history: [{ at: new Date().toISOString(), text: `Duplicated from ${e.number}` }] };
     for (const k of ['sentAt', 'acceptedAt', 'declinedAt', 'scheduledAt', 'completedAt', 'paidAt', 'signedAt']) delete copy[k];
     copy.photos = [];
+    delete copy.pricedRef; delete copy.pricedAt;
     for (const pid of e.photos) { const n = uid(); await kv.set('photo:' + n, await getPhoto(pid)); copy.photos.push(n); }
     await saveSettings();
     await persist(copy);
@@ -1707,7 +1870,7 @@ function wireEditor() {
 // ---------------------------------------------------------------- send & sign
 
 function quoteMessage(e) {
-  const { options, sel, t } = compute(e);
+  const { options, sel, t, pb } = compute(e);
   const b = S.settings.business;
   const first = (e.customer.name || '').split(' ')[0] || 'there';
   const lines = [
@@ -1721,7 +1884,7 @@ function quoteMessage(e) {
     lines.push('');
     for (const o of options) lines.push(`• ${o.name}: ${money(o.est.price)}${o.unit ? ' ' + o.unit : ''}${o.id === sel.id ? ' (recommended)' : ''}${o.blurb ? ': ' + o.blurb : ''}`);
   } else lines.push(`Total: ${money(t.total)}`);
-  lines.push('', `Quote valid for ${S.pricebook.validDays} days.${S.pricebook.depositPct ? ` ${S.pricebook.depositPct}% deposit (${money(t.deposit)}) to schedule.` : ''}`);
+  lines.push('', `Quote valid for ${pb.validDays} days.${pb.depositPct ? ` ${pb.depositPct}% deposit (${money(t.deposit)}) to schedule.` : ''}`);
   if (b.payLink) lines.push(`Pay the deposit online: ${b.payLink}`);
   lines.push('Reply with the option you would like and we will get you on the schedule.', '', b.owner || b.name, [b.phone, b.website].filter(Boolean).join(' · '));
   return lines.join('\n');
@@ -1874,8 +2037,7 @@ function openSign(e, onUpdate) {
 
 async function renderDocInner(e, type) {
   const b = S.settings.business;
-  const pb = S.pricebook;
-  const { options, sel, t, tiers } = compute(e);
+  const { options, sel, t, tiers, pb } = compute(e);
   const x = sel.est;
   const photos = (await Promise.all(e.photos.slice(0, 6).map(getPhoto)));
   const caps = e.ai?.photoCaptions || [];
@@ -2012,7 +2174,8 @@ async function viewDoc(id, type) {
 // ---------------------------------------------------------------- business setup pages
 
 function pageCtx() {
-  return { app, S, $, $$, esc, toast, money, setPath, getPath, saveCompany, savePricebook, ask, setLeaving: (fn) => { leaving = fn; } };
+  return { app, S, $, $$, esc, toast, money, setPath, getPath, saveCompany, savePricebook, ask, setLeaving: (fn) => { leaving = fn; },
+    fuel: () => FUEL, refreshFuel, pickFuel: pickNow, suggest: suggestNow, applyPricing, fuelUse };
 }
 
 // ---------------------------------------------------------------- price book (legacy view, replaced by Pricing Settings)
@@ -2186,7 +2349,9 @@ function viewSettings() {
   const setShop = async (getter) => {
     try {
       st.geo.shop = await getter();
+      st.geo.shop.state = stateFrom(st.geo.shop.label) || null;
       await saveSettings();
+      refreshFuel({ quiet: true }).catch(() => {});
       $('#shoplbl').textContent = 'Shop: ' + (st.geo.shop.label || `${st.geo.shop.lat.toFixed(4)}, ${st.geo.shop.lon.toFixed(4)}`);
       toast('📍 Shop location saved');
     } catch (err) { toast(err.message, 4000); }
@@ -2273,6 +2438,7 @@ async function boot() {
   window.addEventListener('hashchange', route);
   await route();
   window.__qsStarted = true;
+  setTimeout(() => refreshFuel().catch(() => {}), 1500);
   if (!S.settings.onboarded) setTimeout(startOnboarding, 300);
   if (!(await kv.persistent())) {
     const bar = document.createElement('div');

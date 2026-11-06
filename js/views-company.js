@@ -1,6 +1,7 @@
 // Business setup pages: My Resources (workers, equipment), Production Rates (+ multipliers and
 // learning from completed jobs) and Pricing Settings. Uses the app's helpers via `ctx`.
 
+import { DEFAULT_PROFILE } from './autoprice.js';
 import { SKILLS, CAPABILITIES, EQUIPMENT_TYPES, ATTACHMENT_TYPES, AVAILABILITY, newWorker, newEquipment, inventory, defaultCompany, DEFAULT_RATES, DEFAULT_MULTIPLIERS } from './company.js';
 import { rateSuggestions, applySuggestion, compareJob } from './learning.js';
 import { DEFAULT_PRICEBOOK } from './pricebook.js';
@@ -84,7 +85,9 @@ export function viewResources(ctx) {
               ${num('Available for jobs', `equipment.${i}.available`, e.available, 'min="0"')}
               ${num('Purchase cost ($)', `equipment.${i}.purchaseCost`, e.purchaseCost)}
               ${num('Operating cost ($/hr)', `equipment.${i}.hourly`, e.hourly)}
-              ${num('Fuel ($/hr)', `equipment.${i}.fuel`, e.fuel)}
+              ${num(`Fuel ($/hr) <span class="tiny muted">${e.fuelManual ? '· typed in' : '· auto from today\'s price'}</span>`, `equipment.${i}.fuel`, e.fuel)}
+              ${num('Fuel use (gal/hr)', `equipment.${i}.gph`, e.gph, `placeholder="${ctx.fuelUse({ type: e.type }).gph}"`)}
+              <label class="f">Fuel type<select data-c="equipment.${i}.fuelType">${['', 'diesel', 'gas'].map((k) => `<option value="${k}" ${(e.fuelType || '') === k ? 'selected' : ''}>${k ? (k === 'gas' ? 'Gas' : 'Diesel') : `Normal (${ctx.fuelUse({ type: e.type }).kind})`}</option>`).join('')}</select></label>
               ${num('Maintenance ($/hr)', `equipment.${i}.maintenance`, e.maintenance)}
               ${txt(ctx, 'Production rate', `equipment.${i}.productionRate`, e.productionRate, 'e.g. 12 yd³/hr (for your records)')}
               ${txt(ctx, 'Notes', `equipment.${i}.notes`, e.notes)}
@@ -105,7 +108,21 @@ export function viewResources(ctx) {
     if (el.dataset.type === 'boolsel') ctx.setPath(C, p, v === 'true');
     if (/^equipment\.\d+\.quantity$/.test(p)) { const i = +p.split('.')[1]; if (+C.equipment[i].available > v || C.equipment[i].available === undefined) C.equipment[i].available = v; }
     if (/^equipment\.\d+\.available$/.test(p)) { const i = +p.split('.')[1]; if (v > +C.equipment[i].quantity) { C.equipment[i].available = +C.equipment[i].quantity; el.value = C.equipment[i].available; ctx.toast('Available can\'t be more than the quantity owned'); } }
-    if (/\.(type|active|availability)$/.test(p)) { remember(el); draw(); }
+    // fuel: typing a $/hr turns the daily update off for that machine; changing fuel use turns it back on
+    if (/^equipment\.\d+\.fuel$/.test(p)) C.equipment[+p.split('.')[1]].fuelManual = true;
+    if (/^equipment\.\d+\.(gph|fuelType|type)$/.test(p)) {
+      const i = +p.split('.')[1];
+      const e = C.equipment[i];
+      e.fuelManual = false;
+      const f = ctx.fuel().fuel || ctx.pickFuel();
+      const use = ctx.fuelUse(e);
+      if (f && use.gph >= 0) {
+        e.fuel = Math.round(use.gph * f[use.kind].price * 100) / 100;
+        const inp = $(`[data-c="equipment.${i}.fuel"]`);
+        if (inp) inp.value = e.fuel;
+      }
+    }
+    if (/\.(type|active|availability|fuelType)$/.test(p)) { remember(el); draw(); }
   });
   const remember = (el) => { viewResources.open = el.closest('details')?.dataset.id || viewResources.open; };
   ctx.setLeaving(async () => { unbind(); await save(); });
@@ -205,14 +222,37 @@ export function viewRates(ctx) {
 // ---------------------------------------------------------------- Pricing settings
 
 export function viewPricing(ctx) {
-  const { app, S, esc, $ } = ctx;
+  const { app, S, esc, $, $$ } = ctx;
   const pb = S.pricebook;
-  const n = (label, path, suffix = '') => `<label class="f">${label}${suffix ? ` <span class="muted">(${suffix})</span>` : ''}<input type="number" inputmode="decimal" step="any" data-c="${path}" data-type="num" value="${ctx.getPath(pb, path) ?? ''}"></label>`;
+  // auto.* fields show the normal value as a hint, and an empty box means "use the normal value"
+  const n = (label, path, suffix = '') => { const ph = path.startsWith('auto.') ? DEFAULT_PROFILE[path.slice(5)] ?? '' : ''; const v = ctx.getPath(pb, path); return `<label class="f">${label}${suffix ? ` <span class="muted">(${suffix})</span>` : ''}<input type="number" inputmode="decimal" step="any" data-c="${path}" data-type="num" value="${v === undefined || v === null || (ph !== '' && v === 0) ? '' : v}" ${ph !== '' ? `placeholder="${ph}"` : ''}></label>`; };
   // everything but the basics is folded: most people only ever change the first card
   const sec = (icon, title, hint, body, note = '') => `<details class="card fold pfold"><summary><span class="ps-t">${icon} ${title}</span><span class="tiny muted ps-h">${hint}</span></summary><div class="grid g2" style="margin-top:.6rem">${body}</div>${note}</details>`;
   app.innerHTML = `
     <div class="row"><h1>Pricing</h1><div class="spacer"></div><button class="btn sm danger" id="reset">Reset to defaults</button></div>
     <p class="muted">Your costs plus your profit margin make the price. Most people only change <b>The basics</b>. Worker pay and machine costs are in <a href="#/resources">My Resources</a>.</p>
+    <div class="card autoprice" id="autoprice"><h2>🤖 Auto pricing</h2>
+      <p class="muted small" style="margin-top:-.3rem">Works out your costs from your crew, your machines and <b>today's fuel prices</b>. Fuel costs update by themselves every day; bigger changes wait for you to tap Apply.</p>
+      <div id="fuelnow" class="fuelnow"></div>
+      <div class="chips" style="margin:.5rem 0">${chk('Update fuel costs every day by themselves', 'auto.daily', ctx.getPath(pb, 'auto.daily') ?? true)}</div>
+      <details class="fold"><summary>Your company numbers (for overhead, travel and fuel)</summary>
+        <div class="grid g2" style="margin-top:.5rem">
+          ${n('Yearly overhead', 'auto.overheadYear', '$: insurance, shop, office, phones')}
+          ${n('Paid hours per worker', 'auto.hoursWeek', 'per week')}
+          ${n('Working weeks', 'auto.weeksYear', 'per year')}
+          ${n('Truck fuel economy', 'auto.truckMpg', 'mpg')}
+          <label class="f">Trucks run on<select data-c="auto.truckFuel">${['diesel', 'gas'].map((k) => `<option value="${k}" ${(ctx.getPath(pb, 'auto.truckFuel') || 'diesel') === k ? 'selected' : ''}>${k === 'gas' ? 'Gas' : 'Diesel'}</option>`).join('')}</select></label>
+          ${n('Vehicles per tree job', 'auto.vehicles', 'snow jobs count half')}
+          ${n('Wear per mile, per vehicle', 'auto.wearPerMile', '$: tires, repairs')}
+          ${n('Your own diesel price', 'auto.pumpPrice.diesel', '$/gal, optional')}
+          ${n('Your own gas price', 'auto.pumpPrice.gas', '$/gal, optional')}
+        </div>
+        <p class="tiny muted">Leave a field empty to use the normal value. Your own fuel price (a fleet card, for example) replaces the area average.</p>
+      </details>
+      <button class="btn primary big" id="autogo" style="margin-top:.5rem">⚡ Work out my prices</button>
+      <div id="autolist"></div>
+      <div id="autolog"></div>
+    </div>
     <div class="card basics"><h2>⭐ The basics</h2>
       <div class="grid g2">
         ${n('Profit margin', 'targetMarginPct', '%')}${n('Sales tax', 'taxPct', '%')}
@@ -260,6 +300,64 @@ export function viewPricing(ctx) {
         ${Object.entries(pb.equipment).map(([k, q]) => `<tr><td>${esc(q.label)}</td><td><input type="number" step="any" data-c="equipment.${k}.rate" data-type="num" value="${q.rate}"></td><td><input type="number" step="any" data-c="equipment.${k}.min" data-type="num" value="${q.min}"></td></tr>`).join('')}</table></details>
       <details class="card fold pfold" style="grid-column:1/-1"><summary><span class="ps-t">📄 Terms on the quote</span><span class="tiny muted ps-h">the small print customers see</span></summary><textarea id="terms" style="min-height:110px;margin-top:.6rem">${esc(pb.terms)}</textarea></details>
     </div>`;
+  // ---- auto pricing
+  const P = () => ctx.S.pricebook;
+  const fmtVal = (v, unit) => (unit === '%' ? `${v}%` : unit === '$' ? ctx.money(v) : `$${(+v).toFixed(2)}${unit ? unit.replace('$', '') : ''}`);
+  const drawFuel = () => {
+    const F = ctx.fuel();
+    const f = F.fuel || ctx.pickFuel();
+    const box = $('#fuelnow');
+    if (!box) return;
+    if (!f) { box.innerHTML = `<div class="muted small">${esc(F.error || 'Loading today\'s fuel prices…')}</div><button class="btn sm" id="fuelcheck">↻ Check now</button>`; }
+    else {
+      const area = f.diesel.manual && f.gas.manual ? 'your own prices' : `${esc(f.diesel.manual ? f.gas.label : f.diesel.label)} average${f.week ? `, week of ${esc(f.week)}` : ''}`;
+      const where = F.loc?.state || F.loc?.lat != null ? '' : '<div class="tiny muted">Set your shop in <a href="#/settings">Settings → Location</a> to use prices for your area.</div>';
+      box.innerHTML = `<div class="fuelrow"><div><div class="tiny muted">Diesel</div><b>$${f.diesel.price.toFixed(2)}</b>/gal</div><div><div class="tiny muted">Regular gas</div><b>$${f.gas.price.toFixed(2)}</b>/gal</div>
+        <button class="btn sm" id="fuelcheck" aria-label="Check for new fuel prices">↻</button></div>
+        <div class="tiny muted">⛽ ${area}. Source: U.S. Energy Information Administration (updated weekly).</div>${where}${F.error ? `<div class="tiny muted">${esc(F.error)}</div>` : ''}`;
+    }
+    const fc = $('#fuelcheck');
+    if (fc) fc.onclick = async () => { fc.disabled = true; await ctx.refreshFuel({ force: true, quiet: true }); drawFuel(); drawLog(); };
+  };
+  const drawLog = () => {
+    if (!$('#autolog')) return; // left the page while waiting
+    const log = P().autoLog || [];
+    $('#autolog').innerHTML = log.length ? `<details class="fold" style="margin-top:.5rem"><summary>Recent price changes (${log.length})</summary>${log.slice(0, 8).map((l) => `<div class="small" style="margin:.4rem 0"><b>${esc(new Date(l.at).toLocaleDateString())}</b> · ${esc(l.why)}<div class="tiny muted">${l.items.slice(0, 6).map((i) => `${esc(i.label)}: ${fmtVal(i.from, i.unit)} → ${fmtVal(i.to, i.unit)}`).join(' · ')}${l.items.length > 6 ? ` · +${l.items.length - 6} more` : ''}</div></div>`).join('')}</details>` : '';
+  };
+  const drawSuggest = () => {
+    const list = ctx.suggest();
+    const box = $('#autolist');
+    if (!box) return;
+    if (!list.length) { box.innerHTML = '<div class="callout" style="margin-top:.6rem">✓ Your prices already match your company and today\'s fuel.</div>'; return; }
+    box.innerHTML = `<div class="sugg">${list.map((c, k) => `<label class="sg"><input type="checkbox" data-sg="${k}" checked>
+        <span><b>${esc(c.label)}</b> ${c.auto ? '<span class="badge conf-high">daily</span>' : ''}<br>
+        <span class="muted">${fmtVal(c.from, c.unit)}</span> → <b>${fmtVal(c.to, c.unit)}</b><br><span class="tiny muted">${esc(c.why)}</span></span></label>`).join('')}</div>
+      <div class="row" style="margin-top:.5rem"><button class="btn primary" id="sgapply">Apply checked (${list.length})</button><button class="btn" id="sgcancel">Not now</button></div>`;
+    $$('[data-sg]', box).forEach((cb) => (cb.onchange = () => { $('#sgapply').textContent = `Apply checked (${$$('[data-sg]:checked', box).length})`; }));
+    $('#sgcancel').onclick = () => { box.innerHTML = ''; };
+    $('#sgapply').onclick = async () => {
+      const pick = $$('[data-sg]:checked', box).map((cb) => list[+cb.dataset.sg]);
+      if (!pick.length) return;
+      const done = await ctx.applyPricing(pick, 'Auto pricing (you approved)');
+      ctx.toast(`✓ ${done.length} price${done.length === 1 ? '' : 's'} updated`);
+      unbind();
+      viewPricing(ctx);
+      document.getElementById('autoprice')?.scrollIntoView({ block: 'start' });
+    };
+  };
+  $('#autogo').onclick = async () => {
+    const go = $('#autogo');
+    go.disabled = true;
+    if (!ctx.fuel().fuel) await ctx.refreshFuel({ quiet: true }).catch(() => {});
+    if (!document.body.contains(go)) return; // left the page while waiting
+    drawFuel();
+    drawSuggest();
+    go.disabled = false;
+  };
+  drawFuel();
+  drawLog();
+  if (!ctx.fuel().fuel) ctx.refreshFuel({ quiet: true }).then(drawFuel).catch(() => {});
+
   // a worked example so "35% margin" means something
   const example = () => {
     const P = S.pricebook;
@@ -269,7 +367,11 @@ export function viewPricing(ctx) {
     $('#pexample').innerHTML = `Example: a job with <b>$1,000</b> of labor and equipment is quoted at about <b>${ctx.money(price)}</b>, leaving <b>${ctx.money(price - cost)}</b> profit after overhead.`;
   };
   example();
-  const unbind = bind(ctx, app, () => S.pricebook, () => ctx.savePricebook(), example);
+  const unbind = bind(ctx, app, () => S.pricebook, () => ctx.savePricebook(), (path) => {
+    if (path === 'travel.perMile' || path === 'equipmentDefaults.fuel') ((S.pricebook.auto ||= {}).manual ||= {})[path] = true;
+    if (path.startsWith('auto.pumpPrice')) { ctx.pickFuel(); drawFuel(); }
+    example();
+  });
   const onTerms = () => { S.pricebook.terms = $('#terms').value; ctx.savePricebook(); };
   $('#terms').addEventListener('input', onTerms);
   ctx.setLeaving(async () => { unbind(); await ctx.savePricebook(); });
@@ -277,6 +379,7 @@ export function viewPricing(ctx) {
     if (!(await ctx.ask('Reset all pricing settings to defaults?', { ok: 'Reset', danger: true }))) return;
     S.pricebook = structuredClone(DEFAULT_PRICEBOOK);
     await ctx.savePricebook();
+    unbind();
     viewPricing(ctx);
     ctx.toast('Pricing reset');
   };

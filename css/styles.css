@@ -475,3 +475,14 @@ details.pfold > summary .ps-t::after { content: ' ▾'; color: var(--primary); }
 details.pfold[open] > summary .ps-t::after { content: ' ▴'; }
 div.f.lab { display: flex; flex-direction: column; gap: .25rem; font-size: .8rem; font-weight: 600; color: var(--muted); }
 div.f.lab .btn { color: var(--text); font-size: .95rem; }
+
+/* ---------- auto pricing & locked prices ---------- */
+.lockbar { margin: -.25rem 0 .75rem; padding: .6rem .75rem; border-radius: 10px; background: var(--surface-2); border-left: 4px solid var(--accent); font-size: .88rem; display: flex; flex-wrap: wrap; gap: .4rem; align-items: center; }
+.fuelnow { padding: .6rem .75rem; border-radius: 10px; background: var(--surface-2); }
+.fuelrow { display: flex; gap: 1.25rem; align-items: center; margin-bottom: .25rem; }
+.fuelrow b { font-size: 1.35rem; }
+.fuelrow .btn { margin-left: auto; }
+.sugg { display: flex; flex-direction: column; gap: .4rem; margin-top: .75rem; }
+.sg { display: flex; gap: .6rem; align-items: flex-start; padding: .6rem .7rem; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); cursor: pointer; }
+.sg input { width: 22px; height: 22px; margin-top: .1rem; flex: none; accent-color: var(--primary); }
+.sg:has(input:checked) { border-color: var(--primary); background: var(--primary-soft); }

@@ -135,10 +135,23 @@ When a customer accepts, the original estimate is frozen. After the job, set the
 ### AI job analysis
 Photos produce a structured analysis with **ranges and a confidence for each item**. Tree jobs: number of trees, species, height, trunk and branch size, condition, nearby buildings, power lines, roads and vehicles, front or back yard, access, slope, brush, logs, debris and stump size. Snow jobs: area, driveway or lot size, parking spaces, sidewalks, depth, snow type, ice, existing piles, plowing difficulty, obstacles and tight areas. Required equipment and crew come from the planner. Things a photo can't show (lean direction, gate width, number of entrances) say so instead of guessing.
 
+## Auto pricing and live fuel prices
+
+**Pricing → 🤖 Auto pricing** works out costs from your company and today's fuel prices, with no AI service and no API key:
+
+- **Fuel prices, every day.** `.github/workflows/fuel.yml` runs daily on GitHub (free on a public repo) and saves the U.S. Energy Information Administration's weekly retail prices for regular gas and diesel to `data/fuel.json`. The app picks the most local price there is for your shop: a nearby city (Boston, Chicago, Denver…), then your state, then your region (New England, Midwest…), then the U.S. average. EIA publishes regional averages once a week, not the price at one station, so you can type your own price (a fleet card, for example) to replace it.
+- **Updates by themselves, once a day:** each machine's fuel cost per hour (its gallons per hour × today's price; set your own gal/hr per machine in My Resources), the fuel cost of rental machines, and the travel cost per mile (vehicles × fuel ÷ mpg + wear). A number you type in yourself is never overwritten.
+- **Suggestions you approve:** your smallest tree job and snow visit, raised if they don't cover a short visit plus your margin; overhead %, from your yearly overhead, crew size and hours; the default pay, from your workers' average; and machine ownership cost, from the purchase price, only when your number looks too low. Every change is logged under *Recent price changes*.
+- **Locked prices on sent quotes.** When a quote leaves Draft, it keeps the prices it was made with, so a fuel change never moves a number the customer already has. The quote shows what today's costs would give, and **Use today's prices** re-prices it on purpose.
+
+**Distance to the job** is filled in from where the photo was taken (its EXIF location, when the phone saved one), otherwise from where you're standing, or from the address. It is driving distance by road from your shop (OSRM, free, no key), with a straight-line estimate when offline. Many phones and photo pickers strip the location from photos, so the phone's own location is the usual fallback.
+
+Run the fuel update by hand: `python3 tools/fetch_fuel.py` (or **Actions → Update fuel prices → Run workflow** on GitHub).
+
 ## Develop
 
 ```bash
-npm test             # node --test: engine, planner, learning, auto-fill, on-device AI, logic and fuzz tests
+npm test             # node --test: engine, planner, learning, auto-fill, on-device AI, auto pricing, logic and fuzz tests
 FUZZ_SEED=42 FUZZ_N=5000 node --test tests/fuzz.test.mjs   # heavier fuzz run; any failure replays from its seed
 npm run build:ai     # optional: rebuild models/tinyclip-vit-8m-16 (Python, see On-device AI)
 ```
@@ -155,6 +168,10 @@ css/styles.css       UI + print (PDF) styles, light/dark
 js/app.js            views: dashboard, editor, documents, send/sign, price book, settings
 js/engine.js         parsing, scope of work, customer options (no DOM)
 js/planner.js        resource-aware task planning, bottlenecks, cost and price
+js/autoprice.js      auto pricing: local fuel prices, fuel per machine, cost per mile, suggestions
+js/exif.js           where and when a photo was taken (EXIF GPS), no library
+data/fuel.json       weekly EIA gas and diesel prices, refreshed daily by .github/workflows/fuel.yml
+tools/fetch_fuel.py  the daily fuel price fetcher (standard library Python)
 js/company.js        workers, equipment, production rates, multipliers (defaults + sample)
 js/learning.js       estimated vs actual, rate suggestions
 js/views-company.js  My Resources, Production Rates, Pricing Settings pages

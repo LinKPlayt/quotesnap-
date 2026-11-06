@@ -1,6 +1,7 @@
 // Location, address lookup and weather. No API keys needed:
 // - Addresses: OpenStreetMap Nominatim (free, light use only)
 // - Weather:   Open-Meteo (free, no key)
+// - Driving:   OSRM demo server (free, no key, light use only)
 
 const NOMINATIM = 'https://nominatim.openstreetmap.org';
 
@@ -46,6 +47,28 @@ export function roadMiles(a, b) {
   const dLon = rad(b.lon - a.lon);
   const h = Math.sin(dLat / 2) ** 2 + Math.cos(rad(a.lat)) * Math.cos(rad(b.lat)) * Math.sin(dLon / 2) ** 2;
   return Math.round(2 * R * Math.asin(Math.sqrt(h)) * 1.25 * 10) / 10;
+}
+
+// Driving distance on real roads, from the free OSRM demo server (no key; light use only).
+// Falls back to the straight-line estimate above when offline or when the server is busy.
+const routeCache = new Map();
+export async function drivingMiles(a, b) {
+  if (!a || !b) return { miles: 0, how: 'none' };
+  const key = [a.lat, a.lon, b.lat, b.lon].map((x) => (+x).toFixed(4)).join(',');
+  if (routeCache.has(key)) return routeCache.get(key);
+  let out = { miles: roadMiles(a, b), how: 'estimate' };
+  if (out.miles < 0.3) return { miles: out.miles, how: 'road', minutes: 1 }; // same spot as the shop
+  try {
+    const ctl = typeof AbortController !== 'undefined' ? new AbortController() : null;
+    const timer = setTimeout(() => ctl?.abort(), 6000);
+    const r = await fetch(`https://router.project-osrm.org/route/v1/driving/${(+a.lon).toFixed(5)},${(+a.lat).toFixed(5)};${(+b.lon).toFixed(5)},${(+b.lat).toFixed(5)}?overview=false`, { signal: ctl?.signal });
+    clearTimeout(timer);
+    const j = r.ok ? await r.json() : null;
+    const route = j?.code === 'Ok' && j.routes?.[0];
+    if (route && route.distance > 0) out = { miles: Math.round((route.distance / 1609.344) * 10) / 10, minutes: Math.round(route.duration / 60), how: 'road' };
+  } catch { /* offline or blocked: keep the estimate */ }
+  routeCache.set(key, out);
+  return out;
 }
 
 // 7-day forecast: snowfall (inches), wind gusts (mph), rain (inches).

@@ -1,0 +1,36 @@
+# Every day: fetch this week's regional gas and diesel prices from the U.S. Energy Information
+# Administration and commit data/fuel.json, which the app reads to price fuel. Free on a public
+# repo, no API key, no AI service.
+name: Update fuel prices
+
+on:
+  schedule:
+    - cron: '17 11 * * *'   # every day, 11:17 UTC (EIA posts new prices Monday evenings, Eastern)
+  workflow_dispatch: {}       # "Run workflow" button on the Actions tab
+
+permissions:
+  contents: write
+
+concurrency:
+  group: fuel-prices
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Fetch EIA weekly retail prices
+        run: python3 tools/fetch_fuel.py
+      - name: Commit if prices changed
+        run: |
+          if git diff --quiet -- data/fuel.json; then echo "No change"; exit 0; fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/fuel.json
+          git commit -m "Fuel prices: week of $(python3 -c 'import json;print(json.load(open("data/fuel.json"))["week"])')"
+          git push
