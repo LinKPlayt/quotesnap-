@@ -178,7 +178,7 @@ export const DEFAULT_MULTIPLIERS = {
     snowPiles: C('Existing snow piles', 1.15, 'difficulty', 'snow'),
     longTravel: C('Long travel distance', 1.5, 'travel', 'both'),
   },
-  method: { bucket: { label: 'Bucket truck', value: 0.7 }, crane: { label: 'Crane', value: 0.6 }, lift: { label: 'Spider lift', value: 0.85 }, climb: { label: 'Climb & rig', value: 1.0 } },
+  method: { bucket: { label: 'Bucket truck', value: 0.7 }, crane: { label: 'Crane', value: 0.6 }, lift: { label: 'Spider lift', value: 0.85 }, climb: { label: 'Climb & rig', value: 1.0 }, fell: { label: 'Cut down from the ground (room to fall)', value: 0.4 } },
   trim: { light: { label: 'Light / deadwood', value: 0.7 }, standard: { label: 'Standard', value: 1.0 }, heavy: { label: 'Heavy / reduction', value: 1.4 } },
   skill: { beginner: { label: 'Beginner', value: 1.3 }, intermediate: { label: 'Intermediate', value: 1.1 }, experienced: { label: 'Experienced', value: 1.0 }, expert: { label: 'Expert', value: 0.9 } },
   obstacles: { low: { label: 'Few obstacles', value: 1.0 }, med: { label: 'Some: cars, curbs', value: 1.2 }, high: { label: 'Many: islands, tight', value: 1.45 } },

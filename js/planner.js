@@ -34,7 +34,20 @@ const EXTRA_SAFETY = {
   steepSlope: 'Steep slope: secure equipment and footing; consider winching logs uphill.',
 };
 
-export const METHOD_LABELS = { crane: 'Crane-assisted removal', bucket: 'Bucket truck', lift: 'Tracked spider lift', climb: 'Climbing & rigging' };
+export const METHOD_LABELS = { crane: 'Crane-assisted removal', bucket: 'Bucket truck', lift: 'Tracked spider lift', climb: 'Climbing & rigging', fell: 'Cut down from the ground' };
+
+// Dropping a tree whole needs a clear area to fall into: these rule it out.
+const FELL_BLOCKERS = {
+  powerLines: 'power lines are nearby', overHouse: 'it hangs over a building', nearStructure: 'a building is too close',
+  fenceGarden: 'a fence or garden is in the way', vehicles: 'cars are in the drop zone', nearRoad: 'it is next to a road',
+};
+// Why a tree can't be cut down from the ground in one piece ('' when it can).
+export function fellBlocked(tree, job = {}) {
+  if (tree.access === 'tight') return 'there is no open space for it to fall';
+  const flags = { ...(tree.hazards || {}), ...(job.conditions || {}) };
+  const hit = Object.keys(FELL_BLOCKERS).find((k) => flags[k]);
+  return hit ? FELL_BLOCKERS[hit] : '';
+}
 
 export const DEBRIS = {
   haul:          { label: 'Chip brush and haul away all wood and debris' },
@@ -90,7 +103,7 @@ function cleanTreeJob(job, tree, notes) {
     tree: {
       ...tree, trees, hazards: tree.hazards || {},
       access: oneOf(tree.access, ['open', 'driveway', 'backyard', 'tight'], 'driveway'),
-      method: oneOf(tree.method, ['auto', 'bucket', 'crane', 'lift', 'climb'], 'auto'),
+      method: oneOf(tree.method, ['auto', 'bucket', 'crane', 'lift', 'climb', 'fell'], 'auto'),
       debris: oneOf(tree.debris, ['haul', 'chipLeaveLogs', 'leave'], 'haul'),
       trimLevel: oneOf(tree.trimLevel, ['light', 'standard', 'heavy'], 'standard'),
     },
@@ -290,10 +303,19 @@ const METHOD_WHY = {
   bucket: 'Bucket truck: faster than climbing and the lowest-cost safe way to do this job.',
   lift: 'Tracked spider lift: fits through a gate, protects the lawn, and is the lowest-cost safe way to do this job.',
   crane: 'Crane: saves enough crew time to be the lowest-cost safe way to do this job.',
+  fell: 'Cut down from the ground: there is room for it to fall, so no climbing, bucket truck or crane is needed.',
 };
 export function calcTree(job, pb = DEFAULT_PRICEBOOK, opts = {}) {
   // the same cleaned-up job the planner sees (typos and broken numbers already fixed)
   const t = cleanTreeJob(job, { ...job.tree, ...(opts.override || {}) }, []).tree;
+  if (t.method === 'fell') {
+    // only when there's a clear area to drop it; otherwise plan it in pieces and say why
+    const why = fellBlocked(t, job);
+    if (!why) { const e = bestLoaders(job, pb, opts); e.reasons = [METHOD_WHY.fell, ...e.reasons.filter((r) => !/selected by estimator/.test(r))]; return e; }
+    const e = calcTree(job, pb, { ...opts, override: { ...(opts.override || {}), method: 'auto' } });
+    e.notes = [`Can't cut it down in one piece because ${why}: planned in sections instead.`, ...e.notes];
+    return e;
+  }
   if (t.method !== 'auto') return bestLoaders(job, pb, opts);
   const rule = recommendMethod(t);
   const hz = t.hazards || {};
@@ -369,7 +391,8 @@ function planTree(job, pb, opts) {
   // --- quantities ---
   const R = (id) => rateOf(company, id);
   let cutHours = 0; // ideal crew time to cut/trim/cable, before crew-size effects
-  let machineHours = 0; // part of it on trees tall enough for the bucket truck / lift / crane
+  let machineHours = 0; // part of it a bucket truck / lift / crane helps with
+  let fellHours = 0; // part of it on removals that are cut down from the ground
   let brush = 0;
   let wood = 0;
   const stumps = [];
@@ -398,7 +421,7 @@ function planTree(job, pb, opts) {
       if (tree.stumps) for (let i = 0; i < qty; i++) stumps.push(d);
     } else if (t.work === 'trim') {
       const r = R('tree_trim');
-      each = (r.baseTime + size / r.rate) * sf * trimF * Math.max(0.8, methodF);
+      each = (r.baseTime + size / r.rate) * sf * trimF * (method === 'fell' ? 1 : Math.max(0.8, methodF));
       brush += vol * 0.25 * trimF * qty;
     } else if (t.work === 'cable') {
       const r = R('cabling');
@@ -409,6 +432,7 @@ function planTree(job, pb, opts) {
     }
     cutHours += each * qty;
     if (t.work === 'remove' || t.work === 'trim') machineHours += each * qty;
+    if (t.work === 'remove') fellHours += each * qty;
     treeLines.push({ ...t, dbhIn: d, qty, hours: r2(each * qty) });
   }
   const debris = tree.debris || 'haul';
@@ -464,7 +488,8 @@ function planTree(job, pb, opts) {
   if (cuttingWork) {
     const rr = R(removalCount ? 'tree_removal' : 'tree_trim');
     cut = cutHours * taskFactor(rr, groups, skillMult) * crewSlow;
-    const machineCut = method === 'climb' ? 0 : cut * (machineHours / cutHours);
+    // felled trees need no machine; trims and cabling on the same job are still climbed
+    const machineCut = method === 'climb' ? 0 : cut * ((method === 'fell' ? fellHours : machineHours) / cutHours);
     const label = treeLines.filter((t) => t.work !== 'stump').map((t) => `${t.qty} × ${t.heightFt ? t.heightFt + ' ft ' : ''}${t.species || 'tree'} (${t.work})`).join(', ');
     const eq = [];
     const saws = of('chainsaw').slice(0, Math.min(crew.filter((w) => w.can?.chainsaw).length || 1, 3));
@@ -482,8 +507,8 @@ function planTree(job, pb, opts) {
     }
     const gear = of('climbing_gear')[0];
     // climbing gear: all of the small trees' time, plus some rigging on the machine trees
-    const gearHours = method === 'climb' ? cut : cut - machineCut + machineCut * 0.3;
-    if (gear) { equipment.push(ownedLine(gear, gearHours, 'Cutting')); eq.push(gear.name); }
+    const gearHours = method === 'climb' ? cut : method === 'fell' ? cut - machineCut : cut - machineCut + machineCut * 0.3;
+    if (gear) { if (gearHours > 0.01) { equipment.push(ownedLine(gear, gearHours, 'Cutting')); eq.push(gear.name); } }
     // no owned gear: rent it for climbing jobs, and for the small trees a machine job still climbs
     else if (gearHours > 0.5) { equipment.push(rentalLine(pb, 'climb', 'climbing_gear', gearHours, 'Cutting')); eq.push('Climbing gear'); }
     addTask({ id: main.id, label: `${removalCount ? 'Tree removal' : 'Tree work'}: ${label}`, qty: r2(cutHours), unit: 'reference-tree hours', workers: crewSize, hours: cut, equipment: eq, factor: r2(cut / Math.max(0.01, cutHours)) });
@@ -676,6 +701,7 @@ function planTree(job, pb, opts) {
   const pr = price('tree', pb, { labor: laborCost, equipment: equipmentCost, fuel: fuelCost, disposal: disposalCost, travel, materials: materialCost }, job, opts);
 
   const safety = Object.keys(HAZARDS).filter((k) => hz[k]).map((k) => HAZARDS[k].safety);
+  if (method === 'fell') safety.unshift('Felling whole: clear a drop zone of 1.5× the tree height, plan two escape routes, and use a proper notch and back cut.');
   for (const [k, txt] of Object.entries(EXTRA_SAFETY)) if (job.conditions?.[k]) safety.push(txt);
   if (job.emergency || job.storm) safety.unshift('Emergency/storm response: site hazard assessment before any cuts.');
 

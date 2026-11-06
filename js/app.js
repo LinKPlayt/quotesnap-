@@ -11,6 +11,7 @@ import { makePdf } from './pdf.js';
 import { localAI } from './localai/manager.js';
 import { interpret } from './localai/interpret.js';
 import { mergeCompany, DEFAULT_MULTIPLIERS } from './company.js';
+import { fellBlocked } from './planner.js';
 import { snapshotEstimate, compareJob, newActual, actualSiteHours } from './learning.js';
 import { viewResources, viewRates, viewPricing } from './views-company.js';
 import { ask, choose, coach, speak, listen, canListen, sayMoney, questionStep } from './guide.js';
@@ -360,7 +361,7 @@ async function askCustomer(e) {
 
 function qctx(e) {
   const P = pricingFor(e);
-  return { company: P.company, pricebook: P.pb, canFindMiles: !!(S.settings.geo.shop && e.customer.address) };
+  return { company: P.company, pricebook: P.pb, canFindMiles: !!(S.settings.geo.shop && e.customer.address), simple: S.settings.simple !== false };
 }
 
 let asking = false;
@@ -1108,7 +1109,7 @@ async function viewEditor(id) {
             </div></div>
           <div id="qcall"></div>
           <div id="details"></div>
-          <details class="fold" ${S.settings.simple ? '' : 'open'}><summary>📍 Distance, difficulty, rush or weekend work</summary>
+          <details class="fold" ${S.settings.simple ? '' : 'open'}><summary>📍 Distance, ${S.settings.simple ? '' : 'difficulty, '}rush or weekend work</summary>
           <div class="grid g3 siteflags" style="margin-top:.5rem">
             ${numField('Distance (miles)', 'job.miles', e.job.miles)}
             <div class="tiny muted" id="milesnote" style="grid-column:1/-1;margin-top:-.2rem"></div>
@@ -1415,61 +1416,69 @@ function renderDetails() {
   const j = e.job;
   const el = $('#details');
   const M = S.company.multipliers;
-  $('#siteflags').innerHTML = `
-      <label class="f">Overall difficulty<select data-k="job.difficulty">${Object.entries(M.difficulty).map(([k, m]) => opt(k, `${m.label} (${m.value}×)`, j.difficulty || 'normal')).join('')}</select></label>
-      ${j.division === 'tree' ? `<label class="f">Property<select data-k="job.property">${opt('residential', 'Residential', j.property || 'residential')}${opt('commercial', 'Commercial', j.property)}</select></label>` : ''}
-    <div class="chips" style="grid-column:1/-1">${check('🚨 Emergency / urgent', 'job.emergency', j.emergency)}${check('🌪 Storm response', 'job.storm', j.storm)}${check('Weekend', 'job.weekend', j.weekend)}${check('Holiday', 'job.holiday', j.holiday)}${j.division === 'tree' ? check('Permit needed', 'job.permit', j.permit) : ''}</div>`;
   const simple = S.settings.simple;
+  // simple screens: rush / weekend / property only; the overall difficulty slider is for detailed mode
+  $('#siteflags').innerHTML = `
+      ${!simple || (j.difficulty && j.difficulty !== 'normal') ? `<label class="f">Overall difficulty<select data-k="job.difficulty">${Object.entries(M.difficulty).map(([k, m]) => opt(k, `${m.label} (${m.value}×)`, j.difficulty || 'normal')).join('')}</select></label>` : ''}
+      ${j.division === 'tree' ? `<label class="f">Home or business<select data-k="job.property">${opt('residential', 'Home', j.property || 'residential')}${opt('commercial', 'Business', j.property)}</select></label>` : ''}
+    <div class="chips" style="grid-column:1/-1">${check('🚨 Emergency / urgent', 'job.emergency', j.emergency)}${j.division === 'tree' ? check('🌪 Storm response', 'job.storm', j.storm) : ''}${check('Weekend', 'job.weekend', j.weekend)}${check('Holiday', 'job.holiday', j.holiday)}${j.division === 'tree' ? check('Permit needed', 'job.permit', j.permit) : ''}</div>`;
   const conds = Object.entries(M.conditions)
     .filter(([k, c]) => (c.division === 'both' || c.division === j.division) && !(j.division === 'tree' && ['powerLines', 'overHouse', 'nearStructure', 'dead', 'leaning', 'fenceGarden'].includes(k)));
   const condChip = ([k, c]) => check(`${c.label}${simple ? '' : ` <span class="tiny muted">${c.value}×</span>`}`, `job.conditions.${k}`, j.conditions?.[k]);
-  // the few that come up all the time stay in view (plus anything already ticked); the rest are one tap away
-  const common = COMMON_CONDITIONS[j.division] || [];
-  const shown = conds.filter(([k]) => common.includes(k) || j.conditions?.[k]);
+  // detailed: the common ones stay in view; simple: they all live under "More options"
+  const common = simple ? [] : COMMON_CONDITIONS[j.division] || [];
+  const shown = conds.filter(([k]) => common.includes(k) || (!simple && j.conditions?.[k]));
   const more = conds.filter((x) => !shown.includes(x));
-  const condBlock = `<h3>Anything making it harder?</h3><div class="chips">${shown.map(condChip).join('')}</div>
-    ${more.length ? `<details class="fold more-conds"><summary>More (${more.length})</summary><div class="chips" style="margin-top:.4rem">${more.map(condChip).join('')}</div></details>` : ''}
+  const condBlock = `${shown.length ? `<h3>Anything making it harder?</h3><div class="chips">${shown.map(condChip).join('')}</div>` : ''}
+    ${more.length && !simple ? `<details class="fold more-conds"><summary>More (${more.length})</summary><div class="chips" style="margin-top:.4rem">${more.map(condChip).join('')}</div></details>` : ''}
     ${simple ? '' : '<div class="tiny muted" style="margin-top:.3rem">Multipliers are set in <a href="#/rates">Production Rates</a>.</div>'}`;
+  const condsSet = conds.filter(([k]) => j.conditions?.[k]).length;
+  // a dropdown keeps its current value even when simple screens hide that choice
+  const choices = (k, cur, list, hidden = []) => list.filter(([v]) => !simple || !hidden.includes(v) || v === cur).map(([v, l]) => opt(v, l, cur)).join('');
+  const moreFold = (inner, count) => `<details class="fold more-opts" ${count ? 'open' : ''}><summary>More options${count ? ` (${count} set)` : ''}</summary><div style="margin-top:.4rem">${inner}</div></details>`;
+
   if (j.division === 'tree') {
     const t = j.tree;
     const last = t.trees.length - 1;
+    const removals = t.trees.some((x) => x.work === 'remove');
+    const fellWhy = t.method === 'fell' ? fellBlocked(t, j) : '';
+    const hz = (k, label) => check(label, `job.tree.hazards.${k}`, t.hazards[k]);
+    const simpleHz = ['powerLines', 'overHouse', 'fenceGarden', 'dead'];
+    const otherHz = [['nearStructure', 'House, shed or garage close by'], ['leaning', '🌪 Leaning or split']].filter(([k]) => !simple || !t.hazards[k]);
+    const extras = `${check('Fix the lawn (soil + seed)', 'job.tree.restore', t.restore)}${check('Cut firewood', 'job.tree.firewood', t.firewood)}`;
+    const moreCount = [t.restore, t.firewood, ...otherHz.map(([k]) => t.hazards[k])].filter(Boolean).length + condsSet;
     el.innerHTML = `
       <datalist id="species">${Object.keys(SPECIES).map((s) => `<option value="${s}">`).join('')}</datalist>
       <div id="trees">${t.trees.map((tr, i) => `
-        <div class="tree-row">
-          <label class="f">Work<select data-k="job.tree.trees.${i}.work">${opt('remove', 'Remove', tr.work)}${opt('trim', 'Trim / prune', tr.work)}${opt('stump', 'Stump only', tr.work)}${opt('cable', 'Cable & brace', tr.work)}</select></label>
-          <label class="f">Species<input list="species" data-k="job.tree.trees.${i}.species" value="${esc(tr.species)}" placeholder="oak"></label>
-          ${numField('Height (ft)', `job.tree.trees.${i}.heightFt`, tr.heightFt)}
-          ${numField('Trunk width (in)', `job.tree.trees.${i}.dbhIn`, tr.dbhIn || '', 'placeholder="auto"')}
+        <div class="tree-row ${simple ? 'simple' : ''}">
+          <label class="f">What<select data-k="job.tree.trees.${i}.work">${opt('remove', 'Remove', tr.work)}${opt('trim', 'Trim', tr.work)}${opt('stump', 'Stump only', tr.work)}${opt('cable', 'Cable', tr.work)}</select></label>
+          ${simple ? '' : `<label class="f">Species<input list="species" data-k="job.tree.trees.${i}.species" value="${esc(tr.species)}" placeholder="oak"></label>`}
+          ${tr.work === 'stump' ? numField('Stump width (in)', `job.tree.trees.${i}.dbhIn`, tr.dbhIn || '', 'placeholder="18"') : numField('Height (ft)', `job.tree.trees.${i}.heightFt`, tr.heightFt)}
+          ${simple || tr.work === 'stump' ? '' : numField('Trunk width (in)', `job.tree.trees.${i}.dbhIn`, tr.dbhIn || '', 'placeholder="auto"')}
           ${numField('How many', `job.tree.trees.${i}.qty`, tr.qty, 'min="1"')}
           <button class="btn sm x" data-rmtree="${i}" ${t.trees.length < 2 ? 'disabled' : ''} aria-label="Remove tree">✕</button>
         </div>`).join('')}</div>
-      <div class="quick"><span class="tiny muted">${t.trees.length > 1 ? `Tree ${last + 1}:` : 'Quick:'}</span>
-        ${HEIGHTS.map((h) => `<button class="qchip ${+t.trees[last].heightFt === h ? 'on' : ''}" data-qh="${h}">${h} ft</button>`).join('')}</div>
-      <div class="quick">${QUICK_SPECIES.map((s) => `<button class="qchip ${t.trees[last].species === s ? 'on' : ''}" data-qs="${s}">${cap(s)}</button>`).join('')}</div>
+      ${t.trees[last].work === 'stump' ? '' : `<div class="quick"><span class="tiny muted">${t.trees.length > 1 ? `Tree ${last + 1}:` : 'Quick:'}</span>
+        ${HEIGHTS.map((h) => `<button class="qchip ${+t.trees[last].heightFt === h ? 'on' : ''}" data-qh="${h}">${h} ft</button>`).join('')}</div>`}
+      ${simple ? '' : `<div class="quick">${QUICK_SPECIES.map((s) => `<button class="qchip ${t.trees[last].species === s ? 'on' : ''}" data-qs="${s}">${cap(s)}</button>`).join('')}</div>`}
       <button class="btn sm" id="addtree" style="margin:.5rem 0 .25rem">+ Add another tree</button>
       <div class="grid g2 stack" style="margin-top:.5rem">
-        <label class="f">Getting to the tree<select data-k="job.tree.access">${opt('open', 'Open: drive right up', t.access)}${opt('driveway', 'Driveway / street', t.access)}${opt('backyard', 'Backyard through gate', t.access)}${opt('tight', 'Tight: no equipment', t.access)}</select></label>
-        <label class="f">Equipment<select data-k="job.tree.method">${opt('auto', 'Best for the job (auto)', t.method)}${opt('bucket', 'Bucket truck', t.method)}${opt('crane', 'Crane', t.method)}${opt('lift', 'Spider lift', t.method)}${opt('climb', 'Climb & rig', t.method)}</select></label>
-        <label class="f">Wood &amp; brush<select data-k="job.tree.debris">${opt('haul', 'Haul away everything', t.debris)}${opt('chipLeaveLogs', 'Haul brush, leave wood', t.debris)}${opt('leave', 'Leave all on site', t.debris)}</select></label>
-        ${t.trees.some((x) => x.work === 'trim') ? `<label class="f">How much trimming<select data-k="job.tree.trimLevel">${opt('light', 'Light / deadwood', t.trimLevel)}${opt('standard', 'Standard', t.trimLevel)}${opt('heavy', 'Heavy / reduction', t.trimLevel)}</select></label>` : ''}
+        <label class="f">Can a truck get to it?<select data-k="job.tree.access">${choices('access', t.access, [['open', 'Yes, right up to it'], ['driveway', simple ? 'Yes' : 'From the driveway or street'], ['backyard', 'Only through a gate'], ['tight', 'No, nothing gets in']], ['open'])}</select></label>
+        ${removals || !simple ? `<label class="f">How it comes down<select data-k="job.tree.method">${choices('method', t.method, [['auto', simple ? 'In sections (app picks the cheapest safe way)' : 'Best for the job (auto)'], ['fell', 'In one piece, from the ground'], ['climb', 'Climb & rig'], ['bucket', 'Bucket truck'], ['lift', 'Spider lift'], ['crane', 'Crane']], ['climb', 'bucket', 'lift', 'crane'])}</select>
+          ${t.method === 'fell' ? `<span class="tiny ${fellWhy ? 'warn-text' : 'muted'}">${fellWhy ? `⚠ Can't drop it whole: ${esc(fellWhy)}. It will be priced in sections.` : 'Needs a clear space as long as the tree is tall. No climbing or bucket truck.'}</span>` : ''}</label>` : ''}
+        <label class="f">${removals ? 'When it\'s down' : 'Branches'}<select data-k="job.tree.debris">${removals ? choices('debris', t.debris, [['haul', 'Haul it all away'], ['chipLeaveLogs', 'Haul branches, leave the logs'], ['leave', 'Leave everything']]) : choices('debris', t.debris, [['haul', 'Haul them away'], ['chipLeaveLogs', 'Haul branches, leave wood'], ['leave', 'Leave them']], ['chipLeaveLogs'])}</select></label>
+        ${t.trees.some((x) => x.work === 'trim') ? `<label class="f">How much trimming<select data-k="job.tree.trimLevel">${opt('light', 'A little', t.trimLevel)}${opt('standard', 'A normal trim', t.trimLevel)}${opt('heavy', 'A lot', t.trimLevel)}</select></label>` : ''}
       </div>
-      <h3>⚠ Hazards near the tree</h3>
+      <div class="chips" style="margin-top:.5rem">${removals ? check('⚙ Grind the stump', 'job.tree.stumps', t.stumps) : ''}${simple ? '' : extras}</div>
+      <h3>⚠ Anything risky?</h3>
       <div class="chips">
-        ${check('⚡ Power lines', 'job.tree.hazards.powerLines', t.hazards.powerLines)}
-        ${check('🏠 Over house', 'job.tree.hazards.overHouse', t.hazards.overHouse)}
-        ${check('Near structure', 'job.tree.hazards.nearStructure', t.hazards.nearStructure)}
-        ${check('☠ Dead / decayed', 'job.tree.hazards.dead', t.hazards.dead)}
-        ${check('Leaning / storm', 'job.tree.hazards.leaning', t.hazards.leaning)}
-        ${check('Fence / garden', 'job.tree.hazards.fenceGarden', t.hazards.fenceGarden)}
+        ${hz('powerLines', '⚡ Power lines')}
+        ${hz('overHouse', simple ? '🏠 Over or next to a building' : '🏠 Over a building')}
+        ${hz('fenceGarden', '🌷 Fence or garden below')}
+        ${hz('dead', simple ? '☠ Dead or storm damaged' : '☠ Dead / decayed')}
+        ${simple ? ['nearStructure', 'leaning'].filter((k) => t.hazards[k]).map((k) => hz(k, HAZARD_LABELS[k])).join('') : otherHz.map(([k, l]) => hz(k, l)).join('')}
       </div>
-      <h3>Extras</h3>
-      <div class="chips">
-        ${check('Stump grinding', 'job.tree.stumps', t.stumps)}
-        ${check('Restore lawn (soil + seed)', 'job.tree.restore', t.restore)}
-        ${check('Cut firewood', 'job.tree.firewood', t.firewood)}
-      </div>
-      ${condBlock}
+      ${simple ? moreFold(`<div class="chips">${extras}${otherHz.map(([k, l]) => hz(k, l)).join('')}</div><h3>Anything making it harder?</h3><div class="chips">${more.map(condChip).join('')}</div>`, moreCount) : condBlock}
       ${e.ai?.conditions?.length ? `<div class="muted tiny" style="margin-top:.5rem">AI condition notes: ${e.ai.conditions.map(esc).join(' · ')}</div>` : ''}`;
     $('#addtree').onclick = () => { t.trees.push(newTree()); e.locks[`job.tree.trees.${t.trees.length - 1}.work`] = true; renderDetails(); changed(); };
     $$('[data-rmtree]').forEach((b) => (b.onclick = () => {
@@ -1482,28 +1491,26 @@ function renderDetails() {
     $$('[data-qs]').forEach((b) => (b.onclick = () => { t.trees[last].species = b.dataset.qs; e.locks[`job.tree.trees.${last}.species`] = true; renderDetails(); changed(); }));
   } else {
     const s = j.snow;
+    const equipment = `<label class="f">Equipment<select data-k="job.snow.method">${opt('auto', simple ? 'App picks the cheapest' : 'Auto-recommend', s.method)}${opt('plow', 'Plow truck', s.method)}${opt('skid', 'Skid steer / pusher', s.method)}${opt('loader', 'Wheel loader / pusher', s.method)}${opt('blower', 'Snow blower', s.method)}${opt('shovel', 'Shovels', s.method)}</select></label>`;
+    const depth = numField('Snow depth (inches)', 'job.snow.depthIn', s.depthIn);
+    const roof = numField('Roof to clear (sq ft)', 'job.snow.roofSqft', s.roofSqft);
+    const obstacles = `<label class="f">How open is it?<select data-k="job.snow.obstacles">${opt('low', 'Wide open', s.obstacles)}${opt('med', 'Some cars or curbs', s.obstacles)}${opt('high', 'Tight: islands, many cars', s.obstacles)}</select></label>`;
+    const events = numField('Storms per season', 'job.snow.events', s.events || '', `placeholder="${S.pricebook.snow.eventsPerSeason}"`);
+    const extraChips = `${check('⭐ Priority (before 7 AM)', 'job.snow.priority', s.priority)}${check('🚚 Haul snow off site', 'job.snow.haul', s.haul)}`;
+    const moreCount = [s.method !== 'auto', +s.roofSqft > 0, s.obstacles !== 'low', +s.events > 0, s.priority, s.haul].filter(Boolean).length + condsSet;
     el.innerHTML = `
-      <div class="quick"><span class="tiny muted">Area:</span>${AREAS.map(([l, v]) => `<button class="qchip ${+s.areaSqft === v ? 'on' : ''}" data-qa="${v}">${l}</button>`).join('')}</div>
+      <div class="quick"><span class="tiny muted">Size:</span>${AREAS.map(([l, v]) => `<button class="qchip ${+s.areaSqft === v ? 'on' : ''}" data-qa="${v}">${l}</button>`).join('')}</div>
       <div class="grid g2">
-        <label class="f">Property<select data-k="job.snow.property">${opt('residential', 'Residential', s.property)}${opt('commercial', 'Commercial', s.property)}</select></label>
-        <label class="f">Equipment<select data-k="job.snow.method">${opt('auto', 'Auto-recommend', s.method)}${opt('plow', 'Plow truck', s.method)}${opt('skid', 'Skid steer / pusher', s.method)}${opt('loader', 'Wheel loader / pusher', s.method)}${opt('blower', 'Snow blower', s.method)}${opt('shovel', 'Shovel crew', s.method)}</select></label>
+        <label class="f">Home or business<select data-k="job.snow.property">${opt('residential', 'Home', s.property)}${opt('commercial', 'Business', s.property)}</select></label>
         ${numField('Area to clear (sq ft)', 'job.snow.areaSqft', s.areaSqft)}
-        ${numField('Sidewalk length (ft)', 'job.snow.walkLf', s.walkLf)}
-        ${numField('Snow depth (inches)', 'job.snow.depthIn', s.depthIn)}
-        ${numField('Roof to clear (sq ft)', 'job.snow.roofSqft', s.roofSqft)}
-        <label class="f">Obstacles<select data-k="job.snow.obstacles">${opt('low', 'Few: open', s.obstacles)}${opt('med', 'Some: cars, curbs', s.obstacles)}${opt('high', 'Many: islands, tight', s.obstacles)}</select></label>
-        ${numField('Storms per season', 'job.snow.events', s.events || '', `placeholder="${S.pricebook.snow.eventsPerSeason}"`)}
+        ${numField('Sidewalks (ft)', 'job.snow.walkLf', s.walkLf)}
+        <label class="f">How they pay<select data-k="job.snow.contract">${opt('perPush', 'Each snowfall', s.contract)}${opt('seasonal', 'Whole winter', s.contract)}</select></label>
+        ${simple ? '' : `${equipment}${depth}${roof}${obstacles}${events}`}
       </div>
       <div id="sitefc"></div>
-      <h3>Service</h3>
-      <div class="chips">
-        ${check('🧂 Salt / de-ice', 'job.snow.salt', s.salt)}
-        ${check('⭐ Priority (before 7 AM)', 'job.snow.priority', s.priority)}
-        ${check('🚚 Haul snow off site', 'job.snow.haul', s.haul)}
-      </div>
-      ${condBlock}
-      <h3>How to charge</h3>
-      <label class="f"><select data-k="job.snow.contract">${opt('perPush', 'Per push (pay per visit)', s.contract)}${opt('seasonal', 'Seasonal contract', s.contract)}</select></label>`;
+      <div class="chips" style="margin-top:.5rem">${check('🧂 Salt it', 'job.snow.salt', s.salt)}${simple ? '' : extraChips}</div>
+      ${simple ? `<div class="tiny muted" style="margin-top:.3rem">Priced at ${esc(s.depthIn)}" of snow. The quote also lists a price for each snow depth.</div>
+        ${moreFold(`<div class="grid g2">${depth}${equipment}${roof}${obstacles}${s.contract === 'seasonal' ? events : ''}</div><div class="chips" style="margin-top:.5rem">${extraChips}</div><h3>Anything making it harder?</h3><div class="chips">${more.map(condChip).join('')}</div>`, moreCount)}` : condBlock}`;
     $$('[data-qa]').forEach((b) => (b.onclick = () => {
       s.areaSqft = +b.dataset.qa;
       if (s.areaSqft >= 10000) s.property = 'commercial';
@@ -1515,6 +1522,8 @@ function renderDetails() {
   }
   markAi();
 }
+
+const HAZARD_LABELS = { nearStructure: 'House, shed or garage close by', leaning: '🌪 Leaning or split' };
 
 async function renderForecast() {
   if (!ED || ED.est.job.division !== 'snow') return;
@@ -1866,7 +1875,8 @@ function wireEditor() {
       notesTimer = setTimeout(readNotes, 700);
     }
     if (k.startsWith('customer.')) renderCustomerExtras();
-    if (/^job\.tree\.trees\.\d+\.work$/.test(k)) { renderDetails(); }  // trim choices appear only for trim work
+    // trim / stump choices follow the work; the "in one piece" warning follows hazards and access
+    if (/^job\.tree\.(trees\.\d+\.work|method|access|hazards\.)|^job\.conditions\.|^job\.snow\.contract/.test(k)) { renderDetails(); }
     changed(/^job\.tree\.(debris|stumps|restore)|^job\.snow\.(salt|contract)/.test(k));
   }
 
@@ -2363,7 +2373,7 @@ function viewSettings() {
     <div class="card"><h2>👍 Easy to use</h2>
           <div class="grid g2">
             <label class="f">Text size<select data-s="textSize">${opt('normal', 'Normal', st.textSize)}${opt('large', 'Large', st.textSize)}${opt('xlarge', 'Extra large', st.textSize)}</select></label>
-            <div class="chips" style="align-items:end">${tog('Simple screens (hide extras)', 'simple')}${tog('🔊 Read prices out loud', 'voice.speak')}${tog('❓ Ask pricing questions after photos', 'askQuestions')}</div>
+            <div class="chips" style="align-items:end">${tog('Simple screens: fewer questions and fields', 'simple')}${tog('🔊 Read prices out loud', 'voice.speak')}${tog('❓ Ask pricing questions after photos', 'askQuestions')}</div>
           </div>
           <div class="row" style="margin-top:.6rem"><button class="btn" id="rerun">🎓 Show the setup & tutorial again</button><button class="btn" id="retips">💡 Show tips again</button></div>
         </div>

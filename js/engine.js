@@ -104,7 +104,9 @@ export function parseDescription(text = '') {
     if (/\b(fence|garden|landscap\w*|flower beds?|patio)\b/.test(t)) hz.fenceGarden = true;
     out.tree.hazards = hz;
 
-    if (/\bcrane\b/.test(t)) out.tree.method = 'crane';
+    // "drop it in one piece", "room to fall", "fell it": cut down from the ground, no climbing or bucket
+    if (/\b(in one piece|drop (?:it|the tree) whole|room (?:for it )?to fall|fell (?:it|the tree)|open (?:field|space) to (?:drop|fall))\b/.test(t)) out.tree.method = 'fell';
+    else if (/\bcrane\b/.test(t)) out.tree.method = 'crane';
     else if (/\bbucket\b|\baerial lift\b/.test(t)) out.tree.method = 'bucket';
     else if (/\b(spider lift|tracked lift|towable lift)\b/.test(t)) out.tree.method = 'lift';
     else if (/\bclimb/.test(t)) out.tree.method = 'climb';
@@ -213,7 +215,7 @@ const FIELD_LABELS = {
 const TREE_KEYS = { work: 'work', species: 'species', heightFt: 'height', dbhIn: 'trunk', qty: 'qty' };
 const VALUE_LABELS = {
   open: 'Open', driveway: 'Driveway / street', backyard: 'Backyard gate', tight: 'Tight – no equipment',
-  auto: 'Auto', bucket: 'Bucket truck', crane: 'Crane', lift: 'Spider lift', climb: 'Climb & rig',
+  auto: 'Auto', bucket: 'Bucket truck', crane: 'Crane', lift: 'Spider lift', climb: 'Climb & rig', fell: 'Cut down from the ground',
   haul: 'Haul everything', chipLeaveLogs: 'Haul brush, leave wood', leave: 'Leave on site',
   remove: 'Remove', trim: 'Trim', stump: 'Stump', cable: 'Cable', tree: 'Tree', snow: 'Snow',
   plow: 'Plow truck', skid: 'Skid steer', blower: 'Snow blower', shovel: 'Shovel crew',
@@ -311,7 +313,9 @@ export function scopeOfWork(job, est) {
     const c = est.config;
     for (const t of est.treeLines) {
       const desc = `${t.qty > 1 ? t.qty + ' × ' : ''}${t.heightFt ? t.heightFt + ' ft ' : ''}${t.species ? cap(t.species) : 'tree'}${t.dbhIn ? ` (~${t.dbhIn}" trunk)` : ''}`;
-      if (t.work === 'remove') lines.push(`Remove ${desc} to as close to grade as practical using ${est.methodLabel.toLowerCase()}.`);
+      if (t.work === 'remove') lines.push(est.method === 'fell'
+        ? `Cut down ${desc} from the ground into the open area (no climbing or lift needed), then cut it up on the ground. Stump cut as close to grade as practical.`
+        : `Remove ${desc} to as close to grade as practical using ${est.methodLabel.toLowerCase()}.`);
       if (t.work === 'trim') lines.push(`${cap(c.trimLevel)} pruning of ${desc}: remove dead, broken and crossing limbs; raise and clear canopy per ANSI A300 standards (no topping).`);
       if (t.work === 'cable') lines.push(`Install cabling & bracing system in ${desc} to reduce risk of limb/stem failure.`);
       if (t.work === 'stump') lines.push(`Grind ${t.qty > 1 ? t.qty + ' stumps' : 'stump'} (~${t.dbhIn}") 6–8" below grade.`);
@@ -349,9 +353,9 @@ export function buildOptions(job, pb = DEFAULT_PRICEBOOK, marginPct, company) {
       return [{ id: 'base', name: 'Recommended', est: e, scope: scopeOfWork(job, e), recommended: true }];
     }
     const variants = [
-      { id: 'basic', name: 'Essential', blurb: 'Tree down, brush chipped, wood left for you.', override: { debris: 'chipLeaveLogs', stumps: false, restore: false, firewood: false } },
-      { id: 'standard', name: 'Standard', blurb: 'Tree removed and everything hauled away.', override: { debris: 'haul', stumps: false, restore: false } },
-      { id: 'complete', name: 'Complete', blurb: 'Removal, full haul-away, stump ground and lawn restored.', override: { debris: 'haul', stumps: true, restore: true } },
+      { id: 'basic', name: 'Cut down, logs left', blurb: 'Tree down, branches chipped and hauled away, logs left for you.', override: { debris: 'chipLeaveLogs', stumps: false, restore: false, firewood: false } },
+      { id: 'standard', name: 'Cut down & haul away', blurb: 'Tree down and everything hauled away. Stump stays.', override: { debris: 'haul', stumps: false, restore: false } },
+      { id: 'complete', name: 'Everything + stump', blurb: 'Tree down, everything hauled away, stump ground and the lawn fixed.', override: { debris: 'haul', stumps: true, restore: true } },
     ];
     const userKey = `${job.tree.debris}|${!!job.tree.stumps}|${!!job.tree.restore}`;
     const list = variants.map((v) => {
@@ -361,7 +365,7 @@ export function buildOptions(job, pb = DEFAULT_PRICEBOOK, marginPct, company) {
     });
     if (!list.some((o) => o.recommended)) {
       const e = calcTree(job, pb, opts);
-      list.push({ id: 'custom', name: 'As Specified', blurb: 'Exactly the work described.', est: e, scope: scopeOfWork(job, e), recommended: true });
+      list.push({ id: 'custom', name: 'As described', blurb: 'Exactly the work described.', est: e, scope: scopeOfWork(job, e), recommended: true });
     }
     return list.sort((a, b) => a.est.price - b.est.price);
   }
@@ -383,9 +387,9 @@ export function buildOptions(job, pb = DEFAULT_PRICEBOOK, marginPct, company) {
   };
   const recommendedId = job.snow.contract === 'seasonal' ? 'seasonal' : job.snow.salt ? 'salt' : 'push';
   return [
-    { id: 'push', name: 'Per Push', blurb: 'Pay only when it snows. Plow/clear per visit.', est: perPush, scope: scopeOfWork(job, perPush), unit: 'per visit', recommended: recommendedId === 'push' },
-    { id: 'salt', name: 'Clear + Salt', blurb: 'Every visit cleared and treated for ice.', est: withSalt, scope: scopeOfWork(job, withSalt), unit: 'per visit', recommended: recommendedId === 'salt' },
-    { id: 'seasonal', name: 'Seasonal Contract', blurb: `Unlimited service all winter${job.snow.salt ? ', salt included' : ''} (${events} events est.), ${pb.snow.seasonalDiscountPct}% off, ${money(seasonal.monthly)}/mo × ${pb.snow.seasonMonths}.`, est: seasonal, scope: scopeOfWork({ ...job, snow: { ...job.snow, contract: 'seasonal' } }, seasonal), unit: 'per season', recommended: recommendedId === 'seasonal' },
+    { id: 'push', name: 'Each snowfall', blurb: 'Pay only when it snows: cleared every visit.', est: perPush, scope: scopeOfWork(job, perPush), unit: 'per visit', recommended: recommendedId === 'push' },
+    { id: 'salt', name: 'Each snowfall + salt', blurb: 'Cleared and salted every visit.', est: withSalt, scope: scopeOfWork(job, withSalt), unit: 'per visit', recommended: recommendedId === 'salt' },
+    { id: 'seasonal', name: 'Whole winter', blurb: `One price, every storm${job.snow.salt ? ', salt included' : ''} (about ${events} storms). ${money(seasonal.monthly)} a month for ${pb.snow.seasonMonths} months.`, est: seasonal, scope: scopeOfWork({ ...job, snow: { ...job.snow, contract: 'seasonal' } }, seasonal), unit: 'per season', recommended: recommendedId === 'seasonal' },
   ];
 }
 

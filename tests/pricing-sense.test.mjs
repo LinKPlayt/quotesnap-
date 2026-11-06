@@ -243,3 +243,30 @@ test('typical jobs land in realistic price ranges', () => {
   ];
   for (const [name, j, lo, hi] of rows) { const p = price(j); assert.ok(p >= lo && p <= hi, `${name}: $${p} (expected $${lo}–$${hi})`); }
 });
+
+// ---------- cut down from the ground, in one piece ----------
+
+test('cut down from the ground: cheapest way when there is room, and it still rises with size', () => {
+  for (const [cname, co] of Object.entries(COMPANIES)) {
+    const F = (tree = {}, trees = [{}], job = {}) => T({ method: 'fell', ...tree }, trees, job);
+    rising('fell height', [...Array(20)].map((_, i) => [`${10 + i * 5} ft`, F({}, [{ heightFt: 10 + i * 5 }])]), co, cname);
+    rising('fell trunk', [...Array(12)].map((_, i) => [`${6 + i * 4} in`, F({}, [{ heightFt: 50, dbhIn: 6 + i * 4 }])]), co, cname);
+    rising('fell count', [...Array(6)].map((_, i) => [`×${i + 1}`, F({}, [{ qty: i + 1 }])]), co, cname);
+    rising('fell access', ['open', 'driveway', 'backyard', 'tight'].map((a) => [a, F({ access: a }, [{ heightFt: 50 }])]), co, cname);
+    rising('fell debris', ['leave', 'chipLeaveLogs', 'haul'].map((d) => [d, F({ debris: d })]), co, cname);
+    // anything that rules out dropping it whole can only raise the price
+    for (const k of ['powerLines', 'overHouse', 'nearStructure', 'fenceGarden', 'dead', 'leaning']) rising(`fell + ${k}`, [['clear', F()], [k, F({ hazards: { [k]: true } })]], co, cname);
+    for (const k of ['vehicles', 'nearRoad', 'steepSlope']) rising(`fell + ${k}`, [['clear', F()], [k, F({}, [{}], { conditions: { [k]: true } })]], co, cname);
+  }
+  for (const h of [20, 40, 60]) {
+    const fell = est(T({ method: 'fell' }, [{ heightFt: h }]));
+    const auto = est(T({}, [{ heightFt: h }]));
+    assert.equal(fell.method, 'fell');
+    assert.ok(fell.price < auto.price, `${h} ft: in one piece $${fell.price} should beat in sections $${auto.price}`);
+    assert.ok(!fell.equipment.some((q) => ['bucket_truck', 'crane', 'spider_lift', 'climbing_gear'].includes(q.key)), fell.equipment.map((q) => q.label).join(', '));
+    assert.ok(fell.safety.some((s) => /drop zone/.test(s)));
+  }
+  const blocked = est(T({ method: 'fell', hazards: { powerLines: true } }));
+  assert.notEqual(blocked.method, 'fell');
+  assert.ok(blocked.notes.some((n) => /Can't cut it down in one piece because power lines/.test(n)));
+});
