@@ -51,6 +51,59 @@ export function choose(title, options, { message = '', cancel = 'Not now' } = {}
   });
 }
 
+// One pricing question per screen, with big buttons, a progress bar and the live price.
+// q: { title, sub, why, kind: 'one'|'yesno'|'many', options: [{ id, label, icon, sub }], noneLabel, auto }
+// Resolves { action: 'answer', value } | { action: 'skip' } | { action: 'back' } | { action: 'done' }.
+// One-choice questions answer on the first tap; "tick all" questions answer with Next.
+export function questionStep(q, { step = 1, total = 1, selected = null, guessed = false, price = '', canBack = false } = {}) {
+  const d = dialog();
+  const many = q.kind === 'many';
+  const on = new Set(many ? selected || [] : selected != null ? [selected] : []);
+  const pct = Math.round(((step - 1) / Math.max(1, total)) * 100);
+  const optBtn = (o) => `<button class="choice ${on.has(o.id) ? 'on' : ''}" data-id="${esc(o.id)}" ${many ? `aria-pressed="${on.has(o.id)}"` : ''}>
+      ${many ? `<span class="tick" aria-hidden="true">${on.has(o.id) ? '✓' : ''}</span>` : ''}
+      ${o.icon ? `<span class="choice-icon">${o.icon}</span>` : ''}<span><b>${esc(o.label)}</b>${o.sub ? `<br><span class="small muted">${esc(o.sub)}</span>` : ''}</span></button>`;
+  d.innerHTML = `<div class="mb qstep">
+    <div class="q-top"><span class="tiny muted">Question ${step} of ${total}</span>${price ? `<span class="q-price" id="qprice">${esc(price)}</span>` : ''}</div>
+    <div class="q-bar"><span style="width:${pct}%"></span></div>
+    <h2>${esc(q.title)}</h2>
+    ${q.sub ? `<p class="ask-msg center">${esc(q.sub)}</p>` : ''}
+    ${guessed ? '<p class="tiny purple center">✨ The photo AI picked the outlined answer. Tap to confirm or change it.</p>' : ''}
+    <div class="choices${q.options.length > 5 && !many ? ' two' : ''}">
+      ${q.auto ? optBtn(q.auto) : ''}${q.options.map(optBtn).join('')}
+      ${many ? `<button class="choice none ${on.size ? '' : 'on'}" data-none><span class="choice-icon">👍</span><span><b>${esc(q.noneLabel || 'None of these')}</b></span></button>` : ''}
+    </div>
+    ${q.why ? `<p class="tiny muted q-why">💡 ${esc(q.why)}</p>` : ''}
+    ${many ? '<button class="btn big primary block" data-next style="margin-top:.6rem">Next →</button>' : ''}
+    <div class="q-nav">
+      <button class="btn" data-back ${canBack ? '' : 'disabled'}>← Back</button>
+      <button class="btn" data-skip>Skip</button>
+      <button class="btn" data-done>Done for now</button>
+    </div></div>`;
+  return new Promise((resolve) => {
+    const done = (v) => { d.close(); resolve(v); };
+    d.querySelectorAll('[data-id]').forEach((b) => (b.onclick = () => {
+      const id = b.dataset.id;
+      if (!many) { done({ action: 'answer', value: id }); return; }
+      if (on.has(id)) on.delete(id); else on.add(id);
+      b.classList.toggle('on', on.has(id));
+      b.setAttribute('aria-pressed', on.has(id));
+      b.querySelector('.tick').textContent = on.has(id) ? '✓' : '';
+      d.querySelector('[data-none]').classList.toggle('on', !on.size);
+    }));
+    const none = d.querySelector('[data-none]');
+    if (none) none.onclick = () => done({ action: 'answer', value: [] });
+    const next = d.querySelector('[data-next]');
+    if (next) next.onclick = () => done({ action: 'answer', value: [...on] });
+    d.querySelector('[data-back]').onclick = () => done({ action: 'back' });
+    d.querySelector('[data-skip]').onclick = () => done({ action: 'skip' });
+    d.querySelector('[data-done]').onclick = () => done({ action: 'done' });
+    d.oncancel = (e) => { e.preventDefault(); done({ action: 'done' }); };
+    d.showModal();
+    d.querySelector('.choice.on, .choice')?.focus({ preventScroll: true });
+  });
+}
+
 // ---------- one-time tips that point at a part of the screen ----------
 
 // steps: [{ el: '#selector', text, title }]. Shown once per `key` unless force.

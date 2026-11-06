@@ -13,7 +13,8 @@ import { interpret } from './localai/interpret.js';
 import { mergeCompany, DEFAULT_MULTIPLIERS } from './company.js';
 import { snapshotEstimate, compareJob, newActual, actualSiteHours } from './learning.js';
 import { viewResources, viewRates, viewPricing } from './views-company.js';
-import { ask, choose, coach, speak, listen, canListen, sayMoney } from './guide.js';
+import { ask, choose, coach, speak, listen, canListen, sayMoney, questionStep } from './guide.js';
+import { jobQuestions, openQuestions, currentAnswer, applyAnswer, questionSummary } from './questions.js';
 import { runOnboarding } from './onboarding.js';
 import { parseCustomer } from './engine.js';
 
@@ -42,6 +43,7 @@ const DEFAULT_SETTINGS = {
   simple: true,       // simple screens: extras folded away
   textSize: 'normal', // normal | large | xlarge
   voice: { speak: false }, // read prices out loud
+  askQuestions: true, // after photos, ask the questions the price depends on
   work: 'both',
 };
 
@@ -250,6 +252,7 @@ const TIPS = {
   editor: [
     { el: '#stepbar', title: 'Your steps', text: 'Every quote has these steps. A ✓ means that step is done. Tap a step to jump to it.' },
     { el: '#card-photos', text: 'Your photos are here. Tap Camera to add more. The app reads them by itself.' },
+    { el: '#qcall', title: 'Quick questions', text: 'The app asks the few things a photo can\'t show, one at a time, so the price is right. Tap Answer to go through them.' },
     { el: '#card-customer', text: 'Who the quote is for. The 📍 button fills in the address from where you are standing.' },
     { el: '.price-hero', text: 'This is the price. It updates by itself when you change anything.' },
     { el: '#sendbar', title: 'Send it', text: 'When it looks right, tap Send. The customer gets a PDF quote by text or email.' },
@@ -339,6 +342,87 @@ async function askCustomer(e) {
     inp?.scrollIntoView({ block: 'center' });
     inp?.focus();
   }
+  return pick;
+}
+
+// ---------------------------------------------------------------- pricing questions
+// One question per screen for everything the price depends on that the photos and notes
+// haven't settled: how many trees, height, access, hazards, cleanup, stumps, timing, distance;
+// or area, sidewalks, depth, ice, salt, obstacles, contract. Answers lock their fields.
+
+function qctx(e) {
+  const P = pricingFor(e);
+  return { company: P.company, pricebook: P.pb, canFindMiles: !!(S.settings.geo.shop && e.customer.address) };
+}
+
+let asking = false;
+async function askQuestions(e, { auto = false } = {}) {
+  if (asking || !ED || ED.est !== e) return;
+  asking = true;
+  const asked = []; // ids already shown this round, for Back
+  const skipped = new Set();
+  let total = 0;
+  let back = null; // question reopened with Back
+  try {
+    for (;;) {
+      if (!ED || ED.est !== e) return;
+      const open = openQuestions(e, qctx(e)).filter((q) => !skipped.has(q.id) && !asked.includes(q.id));
+      total = Math.max(total, asked.length + open.length + (back ? 1 : 0));
+      const q = back ? jobQuestions(e, qctx(e)).find((x) => x.id === back) || open[0] : open[0];
+      back = null;
+      if (!q) break;
+      // only show a starting answer the AI, the notes or the estimator actually gave, never a blank default
+      const fromAi = q.paths.some((p) => (e.aiFields || []).includes(p));
+      const cur = q.kind === 'many' || fromAi || e.answered?.[q.id] ? currentAnswer(e, q) : null;
+      const guessed = q.kind !== 'many' && cur != null && fromAi;
+      const r = await questionStep(q, {
+        step: asked.length + 1, total, selected: cur, guessed,
+        price: money(compute(e).t.total), canBack: asked.length > 0,
+      });
+      if (!ED || ED.est !== e) return;
+      if (r.action === 'done') break;
+      if (r.action === 'skip') { skipped.add(q.id); continue; }
+      if (r.action === 'back') {
+        back = asked.pop() || null;
+        continue;
+      }
+      if (q.id === 'job.miles' && r.value === 'auto') {
+        await milesFromAddress(e);
+        if (!(+e.job.miles > 0)) { toast("Couldn't find that address. Pick the closest distance instead."); continue; }
+        e.locks['job.miles'] = true;
+        (e.answered ||= {})[q.id] = true;
+      } else {
+        applyAnswer(e, q, r.value);
+      }
+      if (!asked.includes(q.id)) asked.push(q.id);
+      e.selectedOption = null;
+      refreshEditorAfterFill();
+    }
+  } finally {
+    asking = false;
+  }
+  if (!ED || ED.est !== e) return;
+  refreshEditorAfterFill();
+  const left = questionSummary(e, qctx(e)).openRequired;
+  if (!left) {
+    const c = compute(e);
+    toast(`✓ All set: ${money(c.t.total)}. Check it over and tap Send.`, 4000);
+    if (S.settings.voice?.speak) speak(`All questions answered. The price is ${sayMoney(c.t.total)}.`);
+  } else if (!auto) toast(`${left} question${left === 1 ? '' : 's'} still open. Tap Answer on the Details card any time.`, 4000);
+}
+
+function renderQuestionCall() {
+  const el = $('#qcall');
+  if (!el || !ED) return;
+  const e = ED.est;
+  const q = questionSummary(e, qctx(e));
+  if (!q.open) { el.innerHTML = `<div class="callout ok small q-callout">✓ <span>All ${q.total} pricing questions answered.</span></div>`; return; }
+  const req = q.openRequired;
+  el.innerHTML = `<div class="callout ${req ? '' : 'ok'} q-callout">
+      <span>❓ <b>${req ? `${req} question${req === 1 ? '' : 's'} to price this right` : `${q.open} optional question${q.open === 1 ? '' : 's'} left`}</b><br>
+      <span class="tiny muted">${q.done} of ${q.total} answered. Things a photo can't show, one tap each.</span></span>
+      <span class="spacer"></span><button class="btn ${req ? 'primary' : ''}" id="qgo">Answer</button></div>`;
+  $('#qgo').onclick = () => askQuestions(e);
 }
 
 // Next weekday from tomorrow that has no job booked yet.
@@ -1014,6 +1098,7 @@ async function viewEditor(id) {
               <button data-d="tree" class="${e.job.division === 'tree' ? 'on' : ''}">🌳 Tree</button>
               <button data-d="snow" class="${e.job.division === 'snow' ? 'on' : ''}">❄ Snow</button>
             </div></div>
+          <div id="qcall"></div>
           <div id="details"></div>
           <details class="fold" ${S.settings.simple ? '' : 'open'}><summary>📍 Distance, difficulty, rush or weekend work</summary>
           <div class="grid g3 siteflags" style="margin-top:.5rem">
@@ -1080,7 +1165,14 @@ async function viewEditor(id) {
     const located = S.settings.geo.autoLocate ? locateInto(e, { auto: true }) : Promise.resolve();
     if (aiOn() && S.settings.ai.auto) runAi(id, { auto: true });
     // ask who it's for while the photos are checked (after location, which may recognize a returning customer)
-    located.finally(() => setTimeout(() => { if (ED && ED.est === e && !e.customer.name && !e.customer.phone) askCustomer(e); }, 300));
+    located.finally(() => setTimeout(async () => {
+      if (!ED || ED.est !== e) return;
+      const pick = !e.customer.name && !e.customer.phone ? await askCustomer(e) : null;
+      if (pick === 'type' || !S.settings.askQuestions) return; // they're typing: don't cover the keyboard
+      // wait for the photo check (up to 30 s) so the questions start from what the AI saw
+      for (let i = 0; i < 60 && AI.busy.has(e.id); i++) await new Promise((r) => setTimeout(r, 500));
+      if (ED && ED.est === e && questionSummary(e, qctx(e)).openRequired) askQuestions(e, { auto: true });
+    }, 300));
   } else {
     if (aiOn() && S.settings.ai.auto && e.photos.length && !e.ai) scheduleAi(e, 300);
     runTips('editor');
@@ -1095,7 +1187,7 @@ function renderSteps() {
   const st = {
     photos: e.photos.length > 0 || !!e.job.description,
     customer: !!(e.customer.name && (e.customer.phone || e.customer.email)),
-    details: !!(e.ai || Object.keys(e.locks || {}).some((k) => k.startsWith('job.')) || e.job.description),
+    details: questionSummary(e, qctx(e)).openRequired === 0,
     send: e.status !== 'draft',
   };
   st.price = st.photos && st.details;
@@ -1104,20 +1196,28 @@ function renderSteps() {
   bar.innerHTML = items.map(([k, icon, label, target], i) => `<button class="step ${st[k] ? 'done' : ''} ${k === current ? 'now' : ''}" data-go="${target}" data-step="${k}"><span class="step-n">${st[k] ? '✓' : i + 1}</span><span class="step-l">${label}</span></button>`).join('');
   bar.querySelectorAll('[data-go]').forEach((b) => (b.onclick = () => {
     if (b.dataset.step === 'customer' && !st.customer) { askCustomer(e); return; }
+    if (b.dataset.step === 'details' && !st.details) { askQuestions(e); return; }
     if (b.dataset.step === 'send') { $('#send')?.click(); return; }
     document.getElementById(b.dataset.go)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }));
+  renderQuestionCall();
   const { t } = compute(e);
   const sb = $('#sendbar');
   if (!sb) return;
-  const hint = !st.photos ? 'Next: add a photo' : !st.customer ? 'Next: who is it for?' : e.status === 'draft' ? 'Ready to send' : `${e.pricedRef ? '🔒 Price locked · ' : ''}Stage: ${cap(e.status)}`;
+  const openReq = questionSummary(e, qctx(e)).openRequired;
+  const hint = !st.photos ? 'Next: add a photo' : !st.customer ? 'Next: who is it for?' : openReq && e.status === 'draft' ? `Next: ${openReq} quick question${openReq === 1 ? '' : 's'}` : e.status === 'draft' ? 'Ready to send' : `${e.pricedRef ? '🔒 Price locked · ' : ''}Stage: ${cap(e.status)}`;
   sb.innerHTML = `<div class="sb-price"><div class="sb-total">${money(t.total)}</div><div class="tiny muted">${esc(hint)}</div></div>
-    ${!st.customer ? '<button class="btn big" id="sb-cust">👤 Customer</button>' : ''}
+    ${!st.customer ? '<button class="btn big" id="sb-cust">👤 Customer</button>' : openReq && e.status === 'draft' ? '<button class="btn big" id="sb-q">❓ Questions</button>' : ''}
     <button class="btn accent big" id="sb-send">✉ Send</button>`;
   $('#sb-send').onclick = async () => {
     if (!st.customer && !(await ask("You haven't added the customer's phone or email yet. Send anyway?", { ok: 'Send anyway', cancel: 'Add customer' }))) { askCustomer(e); return; }
+    if (ED?.est !== e) return;
+    const left = e.status === 'draft' ? questionSummary(e, qctx(e)).openRequired : 0;
+    if (left && !(await ask(`${left} question${left === 1 ? '' : 's'} the price depends on ${left === 1 ? "hasn't" : "haven't"} been answered, so the price may be off. Send anyway?`, { ok: 'Send anyway', cancel: 'Answer them' }))) { askQuestions(e); return; }
     if (ED?.est !== e) return; $('#send')?.click();
   };
+  const sq = $('#sb-q');
+  if (sq) sq.onclick = () => askQuestions(e);
   const sc = $('#sb-cust');
   if (sc) sc.onclick = () => askCustomer(e);
 }
@@ -2255,7 +2355,7 @@ function viewSettings() {
     <div class="card"><h2>👍 Easy to use</h2>
           <div class="grid g2">
             <label class="f">Text size<select data-s="textSize">${opt('normal', 'Normal', st.textSize)}${opt('large', 'Large', st.textSize)}${opt('xlarge', 'Extra large', st.textSize)}</select></label>
-            <div class="chips" style="align-items:end">${tog('Simple screens (hide extras)', 'simple')}${tog('🔊 Read prices out loud', 'voice.speak')}</div>
+            <div class="chips" style="align-items:end">${tog('Simple screens (hide extras)', 'simple')}${tog('🔊 Read prices out loud', 'voice.speak')}${tog('❓ Ask pricing questions after photos', 'askQuestions')}</div>
           </div>
           <div class="row" style="margin-top:.6rem"><button class="btn" id="rerun">🎓 Show the setup & tutorial again</button><button class="btn" id="retips">💡 Show tips again</button></div>
         </div>

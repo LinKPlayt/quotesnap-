@@ -30,9 +30,11 @@ QuoteSnap builds:
   1. Snap photos. The app checks them, fills in the job, and fills in the address from GPS.
   2. If the address matches an earlier customer, it fills in their name and phone ("👋 Returning customer").
   3. If not, it asks **"Who is this quote for?"**: say their name and number, pick from contacts, or type it.
-  4. It can **read the price out loud** when the quote is ready.
-  5. Say **"send it"** while talking to open Send.
-  6. When the customer accepts, it offers **the next open weekday** for the job.
+  4. Then it asks the **pricing questions** a photo can't answer (see below), one tap each.
+  5. It can **read the price out loud** when the quote is ready.
+  6. Say **"send it"** while talking to open Send.
+  7. When the customer accepts, it offers **the next open weekday** for the job.
+- **Pricing questions (`js/questions.js`):** the app asks everything the price depends on, one question per screen with big buttons, a progress bar and the live price. Tree jobs: how many trees; for each tree the work, height, trunk size and species (stump size for stump-only work); how much trimming; access; hazards (power lines, over the house, buildings, dead, leaning, fence); other conditions (slope, road, cars, narrow gate, long drag, big logs, brush, cleanup, wet, frozen); what happens to the wood; firewood; stump grinding; lawn restore; home or business; permit. Snow jobs: home or business, area, sidewalks, depth, heavy snow / ice / piles, salt, obstacles, other conditions, roof, hauling, priority and per-visit or seasonal (with storms per season). Both: rush, storm, weekend or holiday work, and the distance from your shop (or "work it out from the address"). Questions follow the answers (trim work asks how much trimming, a removal asks about the stump), the AI's guess is shown as the starting answer to confirm, and a field you already changed by hand is never asked again. **Back**, **Skip** and **Done for now** work on every question. The Details card shows how many are left with an **Answer** button, the step bar's Details step is ✓ only when they are answered, and Send warns if any are still open. Turn off the automatic start in Settings → Easy to use.
 - **Safety:** a far-away GPS fix or mistyped address (over 200 miles from the shop) never fills in the distance; the app warns you instead.
 
 ## More features
@@ -151,7 +153,7 @@ Run the fuel update by hand: `python3 tools/fetch_fuel.py` (or **Actions → Upd
 ## Develop
 
 ```bash
-npm test             # node --test: engine, planner, learning, auto-fill, on-device AI, auto pricing, logic and fuzz tests
+npm test             # node --test: engine, planner, learning, auto-fill, on-device AI, auto pricing, pricing questions, logic and fuzz tests
 FUZZ_SEED=42 FUZZ_N=5000 node --test tests/fuzz.test.mjs   # heavier fuzz run; any failure replays from its seed
 npm run build:ai     # optional: rebuild models/tinyclip-vit-8m-16 (Python, see On-device AI)
 ```
@@ -177,6 +179,7 @@ js/learning.js       estimated vs actual, rate suggestions
 js/views-company.js  My Resources, Production Rates, Pricing Settings pages
 js/guide.js          big dialogs, one-time tips, voice (listen / speak)
 js/onboarding.js     first-run setup + tutorial
+js/questions.js      the pricing questions: which are still open, and writing answers into the job
 js/pricebook.js      default rates
 js/ai.js             optional Claude cloud photo analysis (schema + prompt)
 js/localai/          on-device AI: manager (page side), worker (ONNX Runtime), interpret (scores → fields)

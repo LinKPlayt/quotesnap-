@@ -209,6 +209,7 @@ ul.scope { margin: 0; padding-left: 1.1rem; }
 ul.scope li { margin-bottom: .35rem; }
 .callout { border-left: 3px solid var(--warn); background: var(--surface-2); padding: .6rem .8rem; border-radius: 0 8px 8px 0; font-size: .88rem; margin: .5rem 0; }
 .callout.ai { border-color: var(--snow); }
+.callout.ok { border-color: var(--primary); }
 .actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .5rem; }
 .ai-btn { background: linear-gradient(135deg, #6a3fd0, #1f5d8f); border: 0; color: #fff; }
 
@@ -486,3 +487,23 @@ div.f.lab .btn { color: var(--text); font-size: .95rem; }
 .sg { display: flex; gap: .6rem; align-items: flex-start; padding: .6rem .7rem; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); cursor: pointer; }
 .sg input { width: 22px; height: 22px; margin-top: .1rem; flex: none; accent-color: var(--primary); }
 .sg:has(input:checked) { border-color: var(--primary); background: var(--primary-soft); }
+
+/* ---------- pricing questions (one per screen) ---------- */
+.qstep h2 { margin-top: .6rem; }
+.qstep .center { text-align: center; }
+.q-top { display: flex; justify-content: space-between; align-items: center; gap: .5rem; }
+.q-price { font-weight: 800; color: var(--primary); }
+.q-bar { height: 6px; border-radius: 3px; background: var(--border); overflow: hidden; margin: .35rem 0 .2rem; }
+.q-bar span { display: block; height: 100%; background: var(--primary); transition: width .2s; }
+.qstep .choices { max-height: 56vh; overflow-y: auto; padding: 2px; }
+.qstep .choices.two { grid-template-columns: 1fr 1fr; }
+.qstep .choices.two .choice { min-height: 56px; padding: .7rem .8rem; }
+.qstep .choice .tick { width: 1.6rem; height: 1.6rem; flex: none; border: 2px solid var(--border); border-radius: 6px; display: grid; place-items: center; font-weight: 800; color: var(--primary); }
+.qstep .choice.on .tick { border-color: var(--primary); }
+.qstep .choice.none { border-style: dashed; }
+.q-why { margin: .7rem 0 0; }
+.q-nav { display: grid; grid-template-columns: repeat(3, 1fr); gap: .5rem; margin-top: .8rem; }
+.q-callout { display: flex; align-items: center; gap: .6rem; flex-wrap: wrap; margin-bottom: .75rem; }
+.q-callout .spacer { flex: 1; }
+.qstep .choice:hover:not(.on) { background: var(--surface); }
+@media (hover: none) { .qstep .choice:hover:not(.on) { border-color: var(--border); } }
