@@ -649,7 +649,7 @@ function viewDashboard() {
 
     <div class="kpis">
       <div class="kpi"><div class="l">Open pipeline</div><div class="v">${money(st.pipeline)}</div><div class="muted small">${st.sent.length} quotes awaiting reply</div></div>
-      <div class="kpi"><div class="l">Profit this month</div><div class="v">${money(st.profitMonth)}</div><div class="muted small">${money(st.wonMonth)} in won quotes · ${money(st.profitWon)} all-time</div></div>
+      <div class="kpi"><div class="l">Profit this month</div><div class="v">${money(st.profitMonth)}</div><div class="muted small">${money(st.wonMonth)} in accepted quotes · ${money(st.profitWon)} all-time</div></div>
       <div class="kpi"><div class="l">Win rate</div><div class="v">${st.winRate == null ? '—' : st.winRate + '%'}</div><div class="muted small">accepted vs declined</div></div>
       <div class="kpi"><div class="l">Avg margin won</div><div class="v">${st.avgMargin == null ? '—' : st.avgMargin + '%'}</div><div class="muted small">target ${S.pricebook.targetMarginPct}%</div></div>
     </div>
