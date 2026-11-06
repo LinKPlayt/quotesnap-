@@ -34,7 +34,7 @@ const chk = (label, path, val) => `<label class="chip"><input type="checkbox" da
 // ---------------------------------------------------------------- My Resources
 
 export function viewResources(ctx) {
-  const { app, S, esc, $, $$ } = ctx;
+  const { app, S, esc, $, $$, money } = ctx;
   const C = S.company;
   let filter = viewResources.filter || 'all';
   const draw = () => {
@@ -44,27 +44,29 @@ export function viewResources(ctx) {
     const eq = C.equipment.map((e, i) => ({ e, i })).filter(({ e }) => filter === 'all' || EQUIPMENT_TYPES[e.type]?.cat === filter || EQUIPMENT_TYPES[e.type]?.cat === 'both');
     app.innerHTML = `
       <div class="row"><h1>My Resources</h1><div class="spacer"></div><a class="btn sm" href="#/rates">Production rates →</a></div>
-      <p class="muted">Everything the company owns or has available for jobs. The estimator plans every job with these people and machines only, and tells you when one of them limits the job.</p>
+      <p class="muted">Your crew and machines. Every quote is planned with only what's here, and tells you when something is missing.</p>
       ${C.sample ? `<div class="callout">This is <b>sample data</b> so estimates work right away. Edit it to match your company, or <button class="btn sm" id="startempty">start empty</button>.</div>` : ''}
-      <div class="card"><h2>Available today</h2>
-        <div class="chips"><span class="chip on">👷 Workers ${inv.workers}</span>${typeCounts || '<span class="muted small">No equipment yet</span>'}</div>
+      <details class="card fold"><summary>✅ Available today: ${inv.workers} ${inv.workers === 1 ? 'worker' : 'workers'}, ${Object.values(inv.counts).reduce((a, b) => a + b, 0)} machines</summary>
+        <div class="chips" style="margin-top:.4rem">${typeCounts || '<span class="muted small">No equipment yet</span>'}</div>
         ${attCounts ? `<div class="chips" style="margin-top:.4rem"><span class="tiny muted">Attachments:</span>${attCounts}</div>` : ''}
-      </div>
+      </details>
 
-      <div class="card"><div class="row" style="margin-bottom:.5rem"><h2 style="margin:0">👷 Workers</h2><div class="spacer"></div><button class="btn sm primary" id="addw">+ Add worker</button></div>
+      <div class="card"><div class="row" style="margin-bottom:.25rem"><h2 style="margin:0">👷 Workers</h2><div class="spacer"></div><button class="btn sm primary" id="addw">+ Add worker</button></div>
+        <p class="tiny muted" style="margin:0 0 .5rem">Tap a name to change pay, skills or what they can run.</p>
         ${C.workers.length ? C.workers.map((w, i) => `
-          <div class="res-item ${w.active === false ? 'inactive' : ''}">
-            <div class="grid g3">
+          <details class="res-item ${w.active === false ? 'inactive' : ''}" ${viewResources.open === w.id ? 'open' : ''} data-id="${w.id}">
+            <summary><b>${esc(w.name || 'Unnamed worker')}</b> <span class="muted small">· ${esc(w.role || SKILLS[w.skill] || '')} · ${money(+w.rate || 0)}/hr${w.active === false ? ' · <b>Off</b>' : ''}${canList(w) ? ` · ${esc(canList(w))}` : ''}</span></summary>
+            <div class="grid g3" style="margin-top:.6rem">
               ${txt(ctx, 'Name', `workers.${i}.name`, w.name, 'Name')}
               ${txt(ctx, 'Role', `workers.${i}.role`, w.role, 'Climber, groundworker…')}
               <label class="f">Skill level<select data-c="workers.${i}.skill">${Object.entries(SKILLS).map(([k, l]) => opt(k, l, w.skill)).join('')}</select></label>
               ${num('Hourly labor cost ($)', `workers.${i}.rate`, w.rate)}
               ${num('Overtime rate ($)', `workers.${i}.otRate`, w.otRate)}
-              <label class="f">Status<select data-c="workers.${i}.active" data-type="boolsel">${opt('true', 'Active', w.active !== false)}${opt('false', 'Inactive', w.active !== false)}</select></label>
+              <label class="f">Working now?<select data-c="workers.${i}.active" data-type="boolsel">${opt('true', 'Yes, available', w.active !== false)}${opt('false', 'No (off, injured, left)', w.active !== false)}</select></label>
             </div>
             <div class="chips" style="margin-top:.5rem"><span class="tiny muted">Can operate:</span>${Object.entries(CAPABILITIES).map(([k, l]) => chk(l, `workers.${i}.can.${k}`, w.can?.[k])).join('')}
               <span class="spacer"></span><button class="btn sm danger" data-delw="${i}">Remove</button></div>
-          </div>`).join('') : '<div class="empty">No workers yet. Add your crew so jobs are planned with real people.</div>'}
+          </details>`).join('') : '<div class="empty">No workers yet. Add your crew so jobs are planned with real people.</div>'}
       </div>
 
       <div class="card"><div class="row" style="margin-bottom:.5rem"><h2 style="margin:0">🚜 Equipment</h2><div class="spacer"></div>
@@ -109,7 +111,7 @@ export function viewResources(ctx) {
   ctx.setLeaving(async () => { unbind(); await save(); });
   function wire() {
     $$('[data-f]').forEach((b) => (b.onclick = () => { filter = viewResources.filter = b.dataset.f; draw(); }));
-    $('#addw').onclick = () => { C.workers.push(newWorker({ name: `Worker ${C.workers.length + 1}` })); save(); draw(); };
+    $('#addw').onclick = () => { const w = newWorker({ name: `Worker ${C.workers.length + 1}` }); C.workers.push(w); viewResources.open = w.id; save(); draw(); $(`details[data-id="${w.id}"] input`)?.focus(); };
     $('#adde').onclick = () => { const e = newEquipment($('#newtype').value); C.equipment.push(e); viewResources.open = e.id; save(); draw(); };
     $$('[data-delw]').forEach((b) => (b.onclick = async () => { if (!(await ctx.ask(`Remove ${C.workers[+b.dataset.delw].name || 'this worker'}?`, { ok: 'Yes', danger: true }))) return; C.workers.splice(+b.dataset.delw, 1); save(); draw(); }));
     $$('[data-dele]').forEach((b) => (b.onclick = async () => { if (!(await ctx.ask(`Remove ${C.equipment[+b.dataset.dele].name}?`, { ok: 'Yes', danger: true }))) return; C.equipment.splice(+b.dataset.dele, 1); save(); draw(); }));
@@ -121,6 +123,14 @@ export function viewResources(ctx) {
   }
   draw();
 }
+
+// "about 2.8 h per tree" reads easier than "0.36 tree per hour"
+const rateWords = (r) => {
+  if (!r.rate) return `${r.baseTime} h per ${r.unit}`;
+  const unit = String(r.unit).replace(/ reference\)/, ')');
+  return r.rate < 1 ? `about ${Math.round((1 / r.rate) * 10) / 10} h per ${unit}` : `${r.rate} ${unit} per hour`;
+};
+const canList = (w) => Object.entries(CAPABILITIES).filter(([k]) => w.can?.[k]).map(([, l]) => l.toLowerCase()).join(', ');
 
 // ---------------------------------------------------------------- Production rates + learning
 
@@ -135,7 +145,7 @@ export function viewRates(ctx) {
     const multTable = (group, title, cols = false) => `<h3>${title}</h3><table class="t">${Object.entries(M[group]).map(([k, m]) => `<tr><td>${esc(m.label)}${cols ? ` <span class="badge">${esc(m.group)}</span>${m.division !== 'both' ? ` <span class="badge ${m.division}">${m.division}</span>` : ''}` : ''}</td><td class="n" style="width:110px"><input type="number" step="0.01" data-c="multipliers.${group}.${k}.value" data-type="num" value="${m.value}"></td></tr>`).join('')}</table>`;
     const rateCard = (r, i) => `
       <details class="res-item" ${viewRates.open === r.id ? 'open' : ''} data-id="${r.id}">
-        <summary><b>${esc(r.task)}</b> <span class="muted small">· ${r.rate ? `${r.rate} ${esc(r.unit)} per hour` : `${r.baseTime} h per ${esc(r.unit)}`} · crew ${r.minCrew}–${r.recCrew}</span></summary>
+        <summary><b>${esc(r.task)}</b> <span class="muted small">· ${esc(rateWords(r))} · ${r.minCrew === r.recCrew ? `${r.minCrew} ${r.minCrew === 1 ? 'person' : 'people'}` : `${r.minCrew}–${r.recCrew} people`}</span></summary>
         <div class="grid g3" style="margin-top:.6rem">
           ${txt(ctx, 'Job type', `rates.${i}.jobType`, r.jobType)}${txt(ctx, 'Task', `rates.${i}.task`, r.task)}${txt(ctx, 'Production unit', `rates.${i}.unit`, r.unit)}
           ${num('Production rate (units / hour)', `rates.${i}.rate`, r.rate)}${num('Base time (hours)', `rates.${i}.baseTime`, r.baseTime)}${txt(ctx, 'Equipment', `rates.${i}.equipment`, r.equipment)}
@@ -198,55 +208,68 @@ export function viewPricing(ctx) {
   const { app, S, esc, $ } = ctx;
   const pb = S.pricebook;
   const n = (label, path, suffix = '') => `<label class="f">${label}${suffix ? ` <span class="muted">(${suffix})</span>` : ''}<input type="number" inputmode="decimal" step="any" data-c="${path}" data-type="num" value="${ctx.getPath(pb, path) ?? ''}"></label>`;
+  // everything but the basics is folded: most people only ever change the first card
+  const sec = (icon, title, hint, body, note = '') => `<details class="card fold pfold"><summary><span class="ps-t">${icon} ${title}</span><span class="tiny muted ps-h">${hint}</span></summary><div class="grid g2" style="margin-top:.6rem">${body}</div>${note}</details>`;
   app.innerHTML = `
-    <div class="row"><h1>Pricing Settings</h1><div class="spacer"></div><button class="btn sm danger" id="reset">Reset to defaults</button></div>
-    <p class="muted">Labor cost + equipment + fuel + disposal + travel + other costs = <b>total job cost</b>. Then your margin, markups and minimum profit give the <b>recommended selling price</b>. Worker and equipment costs come from <a href="#/resources">My Resources</a>; these are the defaults and extras.</p>
+    <div class="row"><h1>Pricing</h1><div class="spacer"></div><button class="btn sm danger" id="reset">Reset to defaults</button></div>
+    <p class="muted">Your costs plus your profit margin make the price. Most people only change <b>The basics</b>. Worker pay and machine costs are in <a href="#/resources">My Resources</a>.</p>
+    <div class="card basics"><h2>⭐ The basics</h2>
+      <div class="grid g2">
+        ${n('Profit margin', 'targetMarginPct', '%')}${n('Sales tax', 'taxPct', '%')}
+        ${n('Smallest tree job', 'minJobTree', '$')}${n('Smallest snow visit', 'minJobSnow', '$')}
+        ${n('Deposit to book', 'depositPct', '%')}${n('Travel cost per mile', 'travel.perMile', '$')}
+      </div>
+      <div class="example" id="pexample"></div>
+    </div>
     <div class="grid g2 cols" style="align-items:start">
-      <div class="card"><h2>👷 Labor</h2><div class="grid g2">
+      ${sec('💰', 'Profit & markups', 'overhead, minimum profit, rush and weekend extra', `
+        ${n('Overhead (other costs)', 'overheadPct', '% of cost')}${n('Round tree prices to', 'roundTo', '$')}
+        ${n('Minimum profit: tree jobs', 'profit.minProfit', '$')}${n('Minimum profit: snow visits', 'profit.minProfitSnow', '$')}
+        ${n('Emergency / urgent extra', 'profit.urgentPct', '%')}${n('Storm response extra', 'profit.stormPct', '%')}
+        ${n('Weekend extra', 'profit.weekendPct', '%')}${n('Holiday extra', 'profit.holidayPct', '%')}
+        ${n('Commercial extra', 'profit.commercialPct', '%')}${n('Residential extra', 'profit.residentialPct', '%')}
+        ${n('Quote good for', 'validDays', 'days')}`)}
+      ${sec('👷', 'Labor', 'default pay, payroll costs, crew size', `
         ${n('Standard hourly labor cost', 'labor.wage', '$/hr')}${n('Overtime labor cost', 'labor.overtime', '$/hr')}
         ${n('Payroll burden on all pay', 'labor.burdenPct', '%')}${n('Minimum labor charge', 'labor.minCharge', '$')}
-        ${n('Default tree crew', 'crew.tree', 'if no workers listed')}${n('Default snow crew', 'crew.snow', 'if no workers listed')}
-      </div><p class="tiny muted">Overtime rates apply to emergency, storm, weekend and holiday jobs.</p></div>
-      <div class="card"><h2>💰 Profit & markups</h2><div class="grid g2">
-        ${n('Target gross margin', 'targetMarginPct', '%')}${n('Overhead (other costs)', 'overheadPct', '% of cost')}
-        ${n('Minimum profit: tree jobs', 'profit.minProfit', '$')}${n('Minimum profit: snow visits', 'profit.minProfitSnow', '$')}
-        ${n('Emergency / urgent markup', 'profit.urgentPct', '%')}${n('Storm / emergency markup', 'profit.stormPct', '%')}
-        ${n('Weekend markup', 'profit.weekendPct', '%')}${n('Holiday markup', 'profit.holidayPct', '%')}
-        ${n('Commercial markup', 'profit.commercialPct', '%')}${n('Residential markup', 'profit.residentialPct', '%')}
-        ${n('Minimum tree job', 'minJobTree', '$')}${n('Minimum snow visit', 'minJobSnow', '$')}
-        ${n('Round tree prices to', 'roundTo', '$')}${n('Sales tax', 'taxPct', '%')}
-        ${n('Deposit', 'depositPct', '%')}${n('Quote valid', 'validDays', 'days')}
-      </div></div>
-      <div class="card"><h2>🚜 Equipment</h2><div class="grid g2">
-        ${n('Default equipment hourly rate', 'equipmentDefaults.hourly', '$/hr')}${n('Default fuel rate', 'equipmentDefaults.fuel', '$/hr')}
-        ${n('Default maintenance rate', 'equipmentDefaults.maintenance', '$/hr')}${n('Mobilization charge', 'equipmentDefaults.mobilization', '$/job')}
-      </div>
-        <h3>Rental rates (equipment you don't own)</h3>
-        <table class="t"><tr><th>Equipment</th><th class="n">$/hr</th><th class="n">Min hrs</th></tr>
-        ${Object.entries(pb.equipment).map(([k, q]) => `<tr><td>${esc(q.label)}</td><td><input type="number" step="any" data-c="equipment.${k}.rate" data-type="num" value="${q.rate}"></td><td><input type="number" step="any" data-c="equipment.${k}.min" data-type="num" value="${q.min}"></td></tr>`).join('')}</table></div>
-      <div class="card"><h2>🚚 Travel</h2><div class="grid g2">
-        ${n('Cost per mile', 'travel.perMile', '$')}${n('Free travel radius', 'travel.freeMiles', 'miles')}
-        ${n('Minimum travel charge', 'travel.minCharge', '$')}${n('Average travel speed', 'travel.speedMph', 'mph')}
-        ${n('Load / unload time per trip', 'travel.loadTime', 'hours')}
-      </div><p class="tiny muted">Travel time = miles ÷ speed + load time, paid for every worker on the crew.</p></div>
-      <div class="card"><h2>🗑 Disposal</h2><div class="grid g2">
-        ${n('Load size', 'disposal.loadYards', 'yd³')}${n('Brush disposal', 'disposal.brush', '$/load')}
-        ${n('Log disposal', 'disposal.logs', '$/load')}${n('Leaf disposal', 'disposal.leaves', '$/load')}
+        ${n('Default tree crew', 'crew.tree', 'if no workers listed')}${n('Default snow crew', 'crew.snow', 'if no workers listed')}`,
+        '<p class="tiny muted">Overtime pay is used for emergency, storm, weekend and holiday jobs. Each worker\'s own pay is in My Resources.</p>')}
+      ${sec('🚚', 'Travel', 'free miles, minimum charge, drive speed', `
+        ${n('Free travel radius', 'travel.freeMiles', 'miles')}${n('Minimum travel charge', 'travel.minCharge', '$')}
+        ${n('Average travel speed', 'travel.speedMph', 'mph')}${n('Load / unload time per trip', 'travel.loadTime', 'hours')}`,
+        '<p class="tiny muted">Drive time is paid for every worker on the crew.</p>')}
+      ${sec('🗑', 'Dump fees', 'what the dump charges per load', `
+        ${n('Truck load size', 'disposal.loadYards', 'yd³')}${n('Brush', 'disposal.brush', '$/load')}
+        ${n('Logs', 'disposal.logs', '$/load')}${n('Leaves', 'disposal.leaves', '$/load')}
         ${n('Stump grindings', 'disposal.stumps', '$/load')}${n('Snow hauling', 'disposal.snow', '$/load')}
-        ${n('General debris', 'disposal.debris', '$/load')}
-      </div></div>
-      <div class="card"><h2>🧂 Materials</h2><div class="grid g2">
-        ${n('Cabling kit', 'materials.cablingKit', '$')}${n('Lawn restore', 'materials.restoreKit', '$/stump')}
-        ${n('Permit fee', 'materials.permitFee', '$')}${n('Salt cost', 'materials.saltPerLb', '$/lb')}
-        ${n('Salt rate', 'materials.saltLbPer1000', 'lb/1000 sq ft')}
-      </div></div>
-      <div class="card"><h2>❄ Snow contracts</h2><div class="grid g2">
-        ${n('Events per season', 'snow.eventsPerSeason')}${n('Seasonal discount', 'snow.seasonalDiscountPct', '%')}
-        ${n('Payment months', 'snow.seasonMonths')}${n('Priority surcharge', 'snow.priorityPct', '%')}
-      </div></div>
-      <div class="card" style="grid-column:1/-1"><h2>Terms & conditions</h2><textarea id="terms" style="min-height:110px">${esc(pb.terms)}</textarea></div>
+        ${n('General debris', 'disposal.debris', '$/load')}`)}
+      ${sec('🧂', 'Materials', 'salt, cabling kits, permits, lawn repair', `
+        ${n('Salt cost', 'materials.saltPerLb', '$/lb')}${n('Salt used', 'materials.saltLbPer1000', 'lb per 1,000 sq ft')}
+        ${n('Cabling kit', 'materials.cablingKit', '$')}${n('Lawn repair', 'materials.restoreKit', '$/stump')}
+        ${n('Permit fee', 'materials.permitFee', '$')}`)}
+      ${sec('❄', 'Snow contracts', 'season length, discount, monthly payments', `
+        ${n('Storms per season', 'snow.eventsPerSeason')}${n('Seasonal discount', 'snow.seasonalDiscountPct', '%')}
+        ${n('Monthly payments', 'snow.seasonMonths')}${n('Priority (before 7 AM) extra', 'snow.priorityPct', '%')}`)}
+      <details class="card fold pfold"><summary><span class="ps-t">🚜 Rentals &amp; machine defaults</span><span class="tiny muted ps-h">for machines you don't own</span></summary>
+        <div class="grid g2" style="margin-top:.6rem">
+        ${n('Default machine cost', 'equipmentDefaults.hourly', '$/hr')}${n('Default fuel', 'equipmentDefaults.fuel', '$/hr')}
+        ${n('Default maintenance', 'equipmentDefaults.maintenance', '$/hr')}${n('Mobilization charge', 'equipmentDefaults.mobilization', '$/job')}
+        </div>
+        <h3>Rental rates</h3>
+        <table class="t"><tr><th>Equipment</th><th class="n">$/hr</th><th class="n">Min hrs</th></tr>
+        ${Object.entries(pb.equipment).map(([k, q]) => `<tr><td>${esc(q.label)}</td><td><input type="number" step="any" data-c="equipment.${k}.rate" data-type="num" value="${q.rate}"></td><td><input type="number" step="any" data-c="equipment.${k}.min" data-type="num" value="${q.min}"></td></tr>`).join('')}</table></details>
+      <details class="card fold pfold" style="grid-column:1/-1"><summary><span class="ps-t">📄 Terms on the quote</span><span class="tiny muted ps-h">the small print customers see</span></summary><textarea id="terms" style="min-height:110px;margin-top:.6rem">${esc(pb.terms)}</textarea></details>
     </div>`;
-  const unbind = bind(ctx, app, () => S.pricebook, () => ctx.savePricebook());
+  // a worked example so "35% margin" means something
+  const example = () => {
+    const P = S.pricebook;
+    const cost = 1000 * (1 + (Math.max(0, +P.overheadPct || 0) / 100));
+    const m = Math.min(0.95, Math.max(0, (+P.targetMarginPct || 0) / 100));
+    const price = cost / (1 - m);
+    $('#pexample').innerHTML = `Example: a job with <b>$1,000</b> of labor and equipment is quoted at about <b>${ctx.money(price)}</b>, leaving <b>${ctx.money(price - cost)}</b> profit after overhead.`;
+  };
+  example();
+  const unbind = bind(ctx, app, () => S.pricebook, () => ctx.savePricebook(), example);
   const onTerms = () => { S.pricebook.terms = $('#terms').value; ctx.savePricebook(); };
   $('#terms').addEventListener('input', onTerms);
   ctx.setLeaving(async () => { unbind(); await ctx.savePricebook(); });

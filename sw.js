@@ -1,5 +1,5 @@
 // Offline-first app shell. Bump VERSION when app files change.
-const VERSION = 'quotesnap-v9';
+const VERSION = 'quotesnap-v10';
 // On-device AI files (model, labels, runtime). Kept across app updates: their URLs are
 // versioned (model ?v=<sha>, runtime folder name), so a new version gets a new entry and the
 // AI worker deletes old ones. Shared with js/localai/worker.js.

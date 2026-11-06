@@ -211,11 +211,11 @@ const TIPS = {
     { el: '#sendbar', title: 'Send it', text: 'When it looks right, tap Send. The customer gets a PDF quote by text or email.' },
   ],
   resources: [
-    { el: '#addw', text: 'Add each person on your crew, what they get paid, and which machines they can run.' },
+    { el: '#addw', text: 'Add each person on your crew. Tap a name to change their pay and which machines they can run.' },
     { el: '#adde', text: 'Add your trucks and machines here. Pick the type first, then tap Add.' },
   ],
   rates: [{ el: '#resetrates', text: 'These are how fast your crew works. You can leave them alone; the app improves them over time from finished jobs (you approve every change).' }],
-  pricebook: [{ el: '.card', text: 'Your costs and profit. You only need to set these once.' }],
+  pricebook: [{ el: '.basics', text: 'These are the prices most people change. Set them once. Everything else can stay as it is.' }],
 };
 
 function runTips(name, force = false) {
@@ -553,7 +553,7 @@ async function routeNow(my) {
   if (name === 'doc') return viewDoc(parts[1], q.get('t') || 'quote');
   if (name === 'estimates') return viewList(q.get('s') || 'all');
   if (name === 'customers') return viewCustomers();
-  if (name === 'pricebook') { viewPricing(pageCtx()); return runTips('pricebook'); }
+  if (name === 'pricebook') { if (!S.settings.seen?.pricebook) { (S.settings.seen ||= {}).pricebook = true; saveSettings(); } viewPricing(pageCtx()); return runTips('pricebook'); }
   if (name === 'resources') { viewResources(pageCtx()); return runTips('resources'); }
   if (name === 'rates') { viewRates(pageCtx()); return runTips('rates'); }
   if (name === 'settings') return viewSettings();
@@ -595,6 +595,23 @@ function stats() {
     upcoming: E.filter((e) => e.scheduledFor && e.scheduledFor >= t && e.scheduledFor <= in14 && !['completed', 'paid', 'declined'].includes(e.status)).sort((a, b) => a.scheduledFor.localeCompare(b.scheduledFor)),
     snowClients: won.filter((e) => e.job.division === 'snow' && e.status !== 'paid'),
   };
+}
+
+// One short checklist instead of several reminders. It disappears once everything is done.
+function setupCard() {
+  const biz = S.settings.business;
+  const steps = [
+    { done: biz.name !== DEFAULT_SETTINGS.business.name && !!biz.phone, href: '#/settings', t: 'Add your business name and phone', d: 'Shown at the top of every quote' },
+    { done: !S.company.sample, href: '#/resources', t: 'Add your crew and machines', d: 'Quotes use a sample crew until you do' },
+    { done: !!S.settings.seen?.pricebook, href: '#/pricebook', t: 'Check your prices', d: 'Profit margin, tax and smallest job' },
+    { done: S.estimates.some((e) => e.status !== 'draft'), href: '#/new?d=tree', t: 'Send your first quote', d: 'Snap a photo, check the price, tap Send' },
+  ];
+  const left = steps.filter((x) => !x.done).length;
+  if (!left) return '';
+  return `<div class="card setup"><h2>🚀 Finish setting up <span class="muted small">${steps.length - left} of ${steps.length} done</span></h2>
+    <div class="progress"><i style="width:${((steps.length - left) / steps.length) * 100}%"></i></div>
+    ${steps.map((x) => `<a class="setup-step ${x.done ? 'done' : ''}" href="${x.href}"><span class="tick">${x.done ? '✓' : ''}</span><span><b>${x.t}</b><span class="tiny muted">${x.d}</span></span><span class="go">›</span></a>`).join('')}
+  </div>`;
 }
 
 function itemRow(e, extra = '') {
@@ -645,6 +662,7 @@ function viewDashboard() {
         : `<div class="callout ai small" style="margin-top:.75rem">✨ <b>Turn on automatic photo analysis.</b> Add an Anthropic API key in <a href="#/settings">Settings</a>, or switch to the free on-device AI.</div>`}
     </div>
 
+    ${setupCard()}
     <div id="wx"></div>
 
     <div class="kpis">
@@ -665,8 +683,6 @@ function viewDashboard() {
         <p>Tap <b>Snap a job</b>, take a few photos of the tree or the driveway, and QuoteSnap builds the scope, labor, equipment, materials, price and a PDF quote.</p>
       </div>`}
     </div>
-    ${S.company.sample ? `<div class="callout">Quotes are planned with a <b>sample crew and equipment</b>. Set up <a href="#/resources">My Resources</a> (your workers and machines), <a href="#/rates">Production Rates</a> and <a href="#/pricebook">Pricing</a> so every estimate matches your company.</div>` : ''}
-    ${S.settings.business.name === DEFAULT_SETTINGS.business.name ? `<div class="callout">Set your business name, logo and phone in <a href="#/settings">Settings</a>.</div>` : ''}
   `;
   for (const id of ['snapcam', 'snapgal']) $('#' + id).onchange = (ev) => createFromPhotos([...ev.target.files]);
   renderAiChip();
@@ -792,9 +808,20 @@ function viewCustomers() {
 
 let ED = null; // { est, tab }
 
+// "3 people · about 22 hours (3 days)" instead of "3 crew × 22.06 h + 3.79 h grinding"
+function plainTime(x) {
+  const h = (+x.siteHours || 0) + (+x.grindHours || 0);
+  const hours = h < 1 ? `about ${Math.max(5, Math.round((h * 60) / 5) * 5)} min` : `about ${h < 10 ? Math.round(h * 2) / 2 : Math.round(h)} hours`;
+  const days = x.days > 1 ? ` (${x.days} days)` : '';
+  return `${x.labor.crew} ${x.labor.crew === 1 ? 'person' : 'people'} · ${hours}${days}`;
+}
 function opt(value, label, cur) { return `<option value="${value}" ${String(cur) === String(value) ? 'selected' : ''}>${label}</option>`; }
 function field(label, k, val, attrs = '') { return `<label class="f">${label}<input data-k="${k}" value="${esc(val ?? '')}" ${attrs}></label>`; }
 function numField(label, k, val, attrs = '') { return field(label, k, val, `type="number" inputmode="decimal" data-type="num" ${attrs}`); }
+const COMMON_CONDITIONS = {
+  tree: ['largeLogs', 'steepSlope', 'limitedAccess', 'narrowGate', 'heavyCleanup'],
+  snow: ['heavySnow', 'ice', 'steepSlope', 'tightAreas', 'snowPiles'],
+};
 function check(label, k, val) { return `<label class="chip"><input type="checkbox" data-k="${k}" data-type="bool" ${val ? 'checked' : ''}>${label}</label>`; }
 
 const HEIGHTS = [15, 25, 35, 45, 60, 75, 90];
@@ -1154,10 +1181,17 @@ function renderDetails() {
       <label class="f">Overall difficulty<select data-k="job.difficulty">${Object.entries(M.difficulty).map(([k, m]) => opt(k, `${m.label} (${m.value}×)`, j.difficulty || 'normal')).join('')}</select></label>
       ${j.division === 'tree' ? `<label class="f">Property<select data-k="job.property">${opt('residential', 'Residential', j.property || 'residential')}${opt('commercial', 'Commercial', j.property)}</select></label>` : ''}
     <div class="chips" style="grid-column:1/-1">${check('🚨 Emergency / urgent', 'job.emergency', j.emergency)}${check('🌪 Storm response', 'job.storm', j.storm)}${check('Weekend', 'job.weekend', j.weekend)}${check('Holiday', 'job.holiday', j.holiday)}${j.division === 'tree' ? check('Permit needed', 'job.permit', j.permit) : ''}</div>`;
-  const condChips = Object.entries(M.conditions)
-    .filter(([k, c]) => (c.division === 'both' || c.division === j.division) && !(j.division === 'tree' && ['powerLines', 'overHouse', 'nearStructure', 'dead', 'leaning', 'fenceGarden'].includes(k)))
-    .map(([k, c]) => check(`${c.label} <span class="tiny muted">${c.value}×</span>`, `job.conditions.${k}`, j.conditions?.[k])).join('');
-  const condBlock = `<h3>Job conditions</h3><div class="chips">${condChips}</div><div class="tiny muted" style="margin-top:.3rem">Multipliers are set in <a href="#/rates">Production Rates</a>.</div>`;
+  const simple = S.settings.simple;
+  const conds = Object.entries(M.conditions)
+    .filter(([k, c]) => (c.division === 'both' || c.division === j.division) && !(j.division === 'tree' && ['powerLines', 'overHouse', 'nearStructure', 'dead', 'leaning', 'fenceGarden'].includes(k)));
+  const condChip = ([k, c]) => check(`${c.label}${simple ? '' : ` <span class="tiny muted">${c.value}×</span>`}`, `job.conditions.${k}`, j.conditions?.[k]);
+  // the few that come up all the time stay in view (plus anything already ticked); the rest are one tap away
+  const common = COMMON_CONDITIONS[j.division] || [];
+  const shown = conds.filter(([k]) => common.includes(k) || j.conditions?.[k]);
+  const more = conds.filter((x) => !shown.includes(x));
+  const condBlock = `<h3>Anything making it harder?</h3><div class="chips">${shown.map(condChip).join('')}</div>
+    ${more.length ? `<details class="fold more-conds"><summary>More (${more.length})</summary><div class="chips" style="margin-top:.4rem">${more.map(condChip).join('')}</div></details>` : ''}
+    ${simple ? '' : '<div class="tiny muted" style="margin-top:.3rem">Multipliers are set in <a href="#/rates">Production Rates</a>.</div>'}`;
   if (j.division === 'tree') {
     const t = j.tree;
     const last = t.trees.length - 1;
@@ -1167,22 +1201,22 @@ function renderDetails() {
         <div class="tree-row">
           <label class="f">Work<select data-k="job.tree.trees.${i}.work">${opt('remove', 'Remove', tr.work)}${opt('trim', 'Trim / prune', tr.work)}${opt('stump', 'Stump only', tr.work)}${opt('cable', 'Cable & brace', tr.work)}</select></label>
           <label class="f">Species<input list="species" data-k="job.tree.trees.${i}.species" value="${esc(tr.species)}" placeholder="oak"></label>
-          ${numField('Height ft', `job.tree.trees.${i}.heightFt`, tr.heightFt)}
-          ${numField('Trunk in', `job.tree.trees.${i}.dbhIn`, tr.dbhIn || '', 'placeholder="auto"')}
-          ${numField('Qty', `job.tree.trees.${i}.qty`, tr.qty, 'min="1"')}
+          ${numField('Height (ft)', `job.tree.trees.${i}.heightFt`, tr.heightFt)}
+          ${numField('Trunk width (in)', `job.tree.trees.${i}.dbhIn`, tr.dbhIn || '', 'placeholder="auto"')}
+          ${numField('How many', `job.tree.trees.${i}.qty`, tr.qty, 'min="1"')}
           <button class="btn sm x" data-rmtree="${i}" ${t.trees.length < 2 ? 'disabled' : ''} aria-label="Remove tree">✕</button>
         </div>`).join('')}</div>
       <div class="quick"><span class="tiny muted">${t.trees.length > 1 ? `Tree ${last + 1}:` : 'Quick:'}</span>
         ${HEIGHTS.map((h) => `<button class="qchip ${+t.trees[last].heightFt === h ? 'on' : ''}" data-qh="${h}">${h} ft</button>`).join('')}</div>
       <div class="quick">${QUICK_SPECIES.map((s) => `<button class="qchip ${t.trees[last].species === s ? 'on' : ''}" data-qs="${s}">${cap(s)}</button>`).join('')}</div>
       <button class="btn sm" id="addtree" style="margin:.5rem 0 .25rem">+ Add another tree</button>
-      <div class="grid g2" style="margin-top:.5rem">
-        <label class="f">Access<select data-k="job.tree.access">${opt('open', 'Open: drive right up', t.access)}${opt('driveway', 'Driveway / street', t.access)}${opt('backyard', 'Backyard through gate', t.access)}${opt('tight', 'Tight: no equipment', t.access)}</select></label>
-        <label class="f">Method / equipment<select data-k="job.tree.method">${opt('auto', 'Auto-recommend', t.method)}${opt('bucket', 'Bucket truck', t.method)}${opt('crane', 'Crane', t.method)}${opt('lift', 'Spider lift', t.method)}${opt('climb', 'Climb & rig', t.method)}</select></label>
-        <label class="f">Debris<select data-k="job.tree.debris">${opt('haul', 'Haul away everything', t.debris)}${opt('chipLeaveLogs', 'Haul brush, leave wood', t.debris)}${opt('leave', 'Leave all on site', t.debris)}</select></label>
-        <label class="f">Trim level<select data-k="job.tree.trimLevel">${opt('light', 'Light / deadwood', t.trimLevel)}${opt('standard', 'Standard', t.trimLevel)}${opt('heavy', 'Heavy / reduction', t.trimLevel)}</select></label>
+      <div class="grid g2 stack" style="margin-top:.5rem">
+        <label class="f">Getting to the tree<select data-k="job.tree.access">${opt('open', 'Open: drive right up', t.access)}${opt('driveway', 'Driveway / street', t.access)}${opt('backyard', 'Backyard through gate', t.access)}${opt('tight', 'Tight: no equipment', t.access)}</select></label>
+        <label class="f">Equipment<select data-k="job.tree.method">${opt('auto', 'Best for the job (auto)', t.method)}${opt('bucket', 'Bucket truck', t.method)}${opt('crane', 'Crane', t.method)}${opt('lift', 'Spider lift', t.method)}${opt('climb', 'Climb & rig', t.method)}</select></label>
+        <label class="f">Wood &amp; brush<select data-k="job.tree.debris">${opt('haul', 'Haul away everything', t.debris)}${opt('chipLeaveLogs', 'Haul brush, leave wood', t.debris)}${opt('leave', 'Leave all on site', t.debris)}</select></label>
+        ${t.trees.some((x) => x.work === 'trim') ? `<label class="f">How much trimming<select data-k="job.tree.trimLevel">${opt('light', 'Light / deadwood', t.trimLevel)}${opt('standard', 'Standard', t.trimLevel)}${opt('heavy', 'Heavy / reduction', t.trimLevel)}</select></label>` : ''}
       </div>
-      <h3>Hazards</h3>
+      <h3>⚠ Hazards near the tree</h3>
       <div class="chips">
         ${check('⚡ Power lines', 'job.tree.hazards.powerLines', t.hazards.powerLines)}
         ${check('🏠 Over house', 'job.tree.hazards.overHouse', t.hazards.overHouse)}
@@ -1215,12 +1249,12 @@ function renderDetails() {
       <div class="grid g2">
         <label class="f">Property<select data-k="job.snow.property">${opt('residential', 'Residential', s.property)}${opt('commercial', 'Commercial', s.property)}</select></label>
         <label class="f">Equipment<select data-k="job.snow.method">${opt('auto', 'Auto-recommend', s.method)}${opt('plow', 'Plow truck', s.method)}${opt('skid', 'Skid steer / pusher', s.method)}${opt('loader', 'Wheel loader / pusher', s.method)}${opt('blower', 'Snow blower', s.method)}${opt('shovel', 'Shovel crew', s.method)}</select></label>
-        ${numField('Paved area (sq ft)', 'job.snow.areaSqft', s.areaSqft)}
-        ${numField('Sidewalks (linear ft)', 'job.snow.walkLf', s.walkLf)}
-        ${numField('Design snow depth (in)', 'job.snow.depthIn', s.depthIn)}
-        ${numField('Roof snow removal (sq ft)', 'job.snow.roofSqft', s.roofSqft)}
+        ${numField('Area to clear (sq ft)', 'job.snow.areaSqft', s.areaSqft)}
+        ${numField('Sidewalk length (ft)', 'job.snow.walkLf', s.walkLf)}
+        ${numField('Snow depth (inches)', 'job.snow.depthIn', s.depthIn)}
+        ${numField('Roof to clear (sq ft)', 'job.snow.roofSqft', s.roofSqft)}
         <label class="f">Obstacles<select data-k="job.snow.obstacles">${opt('low', 'Few: open', s.obstacles)}${opt('med', 'Some: cars, curbs', s.obstacles)}${opt('high', 'Many: islands, tight', s.obstacles)}</select></label>
-        ${numField('Expected events / season', 'job.snow.events', s.events || '', `placeholder="${S.pricebook.snow.eventsPerSeason}"`)}
+        ${numField('Storms per season', 'job.snow.events', s.events || '', `placeholder="${S.pricebook.snow.eventsPerSeason}"`)}
       </div>
       <div id="sitefc"></div>
       <h3>Service</h3>
@@ -1230,7 +1264,7 @@ function renderDetails() {
         ${check('🚚 Haul snow off site', 'job.snow.haul', s.haul)}
       </div>
       ${condBlock}
-      <h3>Quote as</h3>
+      <h3>How to charge</h3>
       <label class="f"><select data-k="job.snow.contract">${opt('perPush', 'Per push (pay per visit)', s.contract)}${opt('seasonal', 'Seasonal contract', s.contract)}</select></label>`;
     $$('[data-qa]').forEach((b) => (b.onclick = () => {
       s.areaSqft = +b.dataset.qa;
@@ -1381,10 +1415,10 @@ function renderResults() {
     <div class="row small"><span>Profit <b style="color:var(--ok)">${money(x.profit + t.adj - (e.discount || 0))}</b></span>
       <span>· Margin <b>${Math.round(((x.profit + t.adj - (e.discount || 0)) / Math.max(1, t.subtotal)) * 100)}%</b></span>
       <span>· Cost ${money(x.fullCost)}</span>
-      ${x.seasonal ? '' : `<span>· ${x.labor.crew} crew × ${x.siteHours} h${x.grindHours ? ` + ${x.grindHours} h grinding` : ''}</span>`}</div>
-    ${options.length > 1 ? `<h3>Customer options</h3><div class="options">${options.map((o) => `
+      ${x.seasonal ? '' : `<span>· ${plainTime(x)}</span>`}</div>
+    ${options.length > 1 ? `<h3>Customer options</h3><div class="tiny muted" style="margin:-.2rem 0 .4rem">Tap one to choose what goes on the quote. All of them are shown to the customer.</div><div class="options">${options.map((o) => `
       <button class="opt ${o.id === sel.id ? 'on' : ''}" data-opt="${o.id}">
-        ${o.recommended ? '<div class="rec">★ As specified</div>' : '<div class="rec" aria-hidden="true" style="visibility:hidden">&nbsp;</div>'}
+        ${o.recommended ? '<div class="rec">★ Matches what you entered</div>' : ''}
         <div class="n">${esc(o.name)}</div><div class="p">${money(o.est.price)}</div><div class="b">${esc(o.blurb || '')}</div>
       </button>`).join('')}</div>` : ''}`;
   $$('[data-opt]').forEach((b) => (b.onclick = () => { e.selectedOption = b.dataset.opt; renderResults(); changed(false); }));
@@ -1564,6 +1598,7 @@ function wireEditor() {
       notesTimer = setTimeout(readNotes, 700);
     }
     if (k.startsWith('customer.')) renderCustomerExtras();
+    if (/^job\.tree\.trees\.\d+\.work$/.test(k)) { renderDetails(); }  // trim choices appear only for trim work
     changed(/^job\.tree\.(debris|stumps|restore)|^job\.snow\.(salt|contract)/.test(k));
   }
 
@@ -2038,33 +2073,53 @@ function viewSettings() {
   const tog = (label, k) => `<label class="chip"><input type="checkbox" data-s="${k}" ${getPath(st, k) ? 'checked' : ''}>${label}</label>`;
   app.innerHTML = `
     <h1>Settings</h1>
-    <div class="card" style="margin-top:.75rem"><h2>👍 Easy to use</h2>
-      <div class="grid g2">
-        <label class="f">Text size<select data-s="textSize">${opt('normal', 'Normal', st.textSize)}${opt('large', 'Large', st.textSize)}${opt('xlarge', 'Extra large', st.textSize)}</select></label>
-        <div class="chips" style="align-items:end">${tog('Simple screens (hide extras)', 'simple')}${tog('🔊 Read prices out loud', 'voice.speak')}</div>
-      </div>
-      <div class="row" style="margin-top:.6rem"><button class="btn" id="rerun">🎓 Show the setup & tutorial again</button><button class="btn" id="retips">💡 Show tips again</button></div>
-    </div>
-    <div class="card setup-links" style="margin-top:.75rem"><h2>🏢 Business setup</h2>
+    <div class="grid g2 cols" style="align-items:start;margin-top:.75rem">
+      <div>
+        <div class="card"><h2>🏢 Your business</h2><p class="muted small" style="margin-top:-.4rem">This goes at the top of every quote and invoice.</p><div class="grid g2 stack">
+          ${f('Business name', 'business.name')}${f('Your name', 'business.owner')}
+          ${f('Phone', 'business.phone', 'tel')}${f('Email', 'business.email', 'email')}
+          ${f('Address', 'business.address')}${f('Website', 'business.website')}
+          ${f('License #', 'business.license')}${f('Insurance', 'business.insurance')}
+          <label class="f">Brand color<input type="color" data-s="business.color" value="${esc(b.color)}" style="height:42px"></label>
+          <div class="f lab">Logo<label class="btn" style="justify-content:center">🖼 ${b.logo ? 'Change logo' : 'Add your logo'}<input type="file" accept="image/*" id="logo" hidden></label></div>
+        </div>${b.logo ? `<div class="row" style="margin-top:.6rem"><img src="${b.logo}" style="max-height:56px" alt="Logo"><button class="btn sm" id="rmlogo">Remove logo</button></div>` : ''}</div>
+        <div class="card setup-links"><h2>🧰 How you price jobs</h2>
       <div class="actions">
         <a class="btn" href="#/resources">👷 My Resources<br><span class="tiny muted">Workers & equipment</span></a>
-        <a class="btn" href="#/rates">⏱ Production Rates<br><span class="tiny muted">Rates, multipliers, learning</span></a>
-        <a class="btn" href="#/pricebook">💲 Pricing Settings<br><span class="tiny muted">Costs, disposal, profit</span></a>
+        <a class="btn" href="#/rates">⏱ Production Rates<br><span class="tiny muted">How fast your crew works</span></a>
+        <a class="btn" href="#/pricebook">💲 Pricing<br><span class="tiny muted">Margin, tax, minimums</span></a>
       </div></div>
-    <div class="grid g2 cols" style="align-items:start">
+    <div class="card"><h2>👍 Easy to use</h2>
+          <div class="grid g2">
+            <label class="f">Text size<select data-s="textSize">${opt('normal', 'Normal', st.textSize)}${opt('large', 'Large', st.textSize)}${opt('xlarge', 'Extra large', st.textSize)}</select></label>
+            <div class="chips" style="align-items:end">${tog('Simple screens (hide extras)', 'simple')}${tog('🔊 Read prices out loud', 'voice.speak')}</div>
+          </div>
+          <div class="row" style="margin-top:.6rem"><button class="btn" id="rerun">🎓 Show the setup & tutorial again</button><button class="btn" id="retips">💡 Show tips again</button></div>
+        </div>
+      </div>
       <div>
-        <div class="card"><h2>✨ Automatic photo analysis</h2>
+        <div class="card"><h2>✉ Quotes &amp; sending</h2><div class="grid g2">
+          ${f('Quote # prefix', 'prefix')}${f('Next quote #', 'nextNumber', 'number')}
+          ${f('Remind me to follow up after (days)', 'followUpDays', 'number')}
+          ${f('Payment link (Square, PayPal…)', 'business.payLink', 'url', 'https://square.link/…')}
+          ${f('Google review link', 'business.reviewLink', 'url', 'https://g.page/r/…')}
+          <label class="chip" style="align-self:end"><input type="checkbox" data-s="showItemized" ${st.showItemized ? 'checked' : ''}>Show labor &amp; equipment costs on quotes</label>
+        </div></div>
+        <div class="card"><h2>✨ Photo AI</h2>
           <label class="engine"><input type="radio" name="engine" data-s="ai.engine" value="local" ${st.ai.engine !== 'cloud' ? 'checked' : ''}>
-            <span><b>On-device AI</b> <span class="badge conf-high">Free</span><br><span class="small muted">Runs in this browser. Photos never leave the phone, no API key, no cost per photo, works offline after a one-time download (about 10 MB model + 14–27 MB runtime). Fills in job type, species, dead or fallen trees, stumps, power lines, house nearby, fence, rough height, snow surface, ice and lot size.</span></span></label>
+            <span><b>On-device AI</b> <span class="badge conf-high">Free</span><br><span class="small muted">Free and private: photos never leave the phone. Works offline after a one-time download (about 25–40 MB). Fills in the job type, species, dead trees, stumps, power lines, nearby houses, rough height and snow surface.</span></span></label>
           <label class="engine"><input type="radio" name="engine" data-s="ai.engine" value="cloud" ${st.ai.engine === 'cloud' ? 'checked' : ''}>
-            <span><b>Claude cloud AI</b> <span class="badge">Optional</span><br><span class="small muted">More detailed: reads your notes, estimates trunk size, writes captions and summaries. Needs your Anthropic API key, sends photos to Anthropic, a few cents per analysis.</span></span></label>
+            <span><b>Claude cloud AI</b> <span class="badge">Optional</span><br><span class="small muted">More detail (trunk size, captions, summaries). Needs your own Anthropic API key. Photos are sent to Anthropic and cost a few cents each.</span></span></label>
           <div id="localbox" class="${st.ai.engine === 'cloud' ? 'hidden' : ''}" style="margin-top:.6rem">
             <div class="small" id="aistat">${esc(aiStatusText())}</div>
+            <div class="row" style="margin-top:.5rem"><button class="btn" id="aidl">⬇ Download AI now</button></div>
+            <details class="fold" style="margin-top:.5rem"><summary class="small">Technical details</summary>
             <div class="row" style="margin-top:.5rem">
               <label class="f" style="width:auto">Processor<select data-s="ai.processor">${opt('auto', 'Auto (GPU when available)', st.ai.processor)}${opt('cpu', 'CPU only', st.ai.processor)}</select></label>
-              <button class="btn" id="aidl">⬇ Download AI now</button><button class="btn sm danger" id="aiclear">Remove downloaded AI</button>
+              <button class="btn sm danger" id="aiclear">Remove downloaded AI</button>
             </div>
             <div class="tiny muted" style="margin-top:.4rem">Model: TinyCLIP ViT-8M/16 (Microsoft, MIT license), 8-bit, running on ONNX Runtime Web. Uses WebGPU when the device has it, otherwise WebAssembly.</div>
+            </details>
           </div>
           <div id="cloudbox" class="${st.ai.engine === 'cloud' ? '' : 'hidden'}" style="margin-top:.6rem">
             <div class="grid">${f('Anthropic API key', 'ai.apiKey', 'password', 'sk-ant-…')}
@@ -2074,28 +2129,11 @@ function viewSettings() {
           <div class="chips" style="margin-top:.6rem">${tog('Analyze photos automatically', 'ai.auto')}</div>
         </div>
         <div class="card"><h2>📍 Location</h2>
-          <p class="muted small">Fill in the job address from where you're standing when you snap a job, and work out drive distance from your shop. Addresses are looked up with OpenStreetMap, the forecast comes from Open-Meteo.</p>
+          <p class="muted small">Fills in the job address from where you're standing, and the drive distance from your shop.</p>
           <div class="chips">${tog('Fill in address automatically when I snap a job', 'geo.autoLocate')}</div>
           <div class="row" style="margin-top:.6rem"><button class="btn" id="shopaddr">Set shop from business address</button><button class="btn" id="shophere">Shop is here</button></div>
           <div class="muted small" style="margin-top:.4rem" id="shoplbl">${st.geo.shop ? `Shop: ${esc(st.geo.shop.label || `${st.geo.shop.lat.toFixed(4)}, ${st.geo.shop.lon.toFixed(4)}`)}` : 'Shop location not set: distance can\'t be filled in automatically.'}</div>
         </div>
-        <div class="card"><h2>Quotes & sending</h2><div class="grid g2">
-          ${f('Quote # prefix', 'prefix')}${f('Next quote #', 'nextNumber', 'number')}
-          ${f('Follow-up after (days)', 'followUpDays', 'number')}
-          ${f('Online payment link', 'business.payLink', 'url', 'https://square.link/…')}
-          ${f('Review link', 'business.reviewLink', 'url', 'https://g.page/r/…')}
-          <label class="chip" style="align-self:end"><input type="checkbox" data-s="showItemized" ${st.showItemized ? 'checked' : ''}>Itemize labor / equipment on quotes</label>
-        </div></div>
-      </div>
-      <div>
-        <div class="card"><h2>Business (shown on quotes)</h2><div class="grid g2 stack">
-          ${f('Business name', 'business.name')}${f('Your name', 'business.owner')}
-          ${f('Phone', 'business.phone', 'tel')}${f('Email', 'business.email', 'email')}
-          ${f('Address', 'business.address')}${f('Website', 'business.website')}
-          ${f('License #', 'business.license')}${f('Insurance', 'business.insurance')}
-          <label class="f">Brand color<input type="color" data-s="business.color" value="${esc(b.color)}" style="height:42px"></label>
-          <label class="f">Logo<input type="file" accept="image/*" id="logo"></label>
-        </div>${b.logo ? `<div class="row" style="margin-top:.6rem"><img src="${b.logo}" style="max-height:56px" alt="Logo"><button class="btn sm" id="rmlogo">Remove logo</button></div>` : ''}</div>
         <div class="card"><h2>Data</h2>
           <p class="muted small">Everything is stored on this device. Back up regularly, or move your data to a new phone. Backups leave out your API key.</p>
           <div class="row"><button class="btn" id="export">⬇ Backup</button><label class="btn">⬆ Restore<input type="file" accept="application/json" id="import" hidden></label>
